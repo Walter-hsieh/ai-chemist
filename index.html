@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Chemist - Phase 1</title>
+    <style>
+        body { font-family: sans-serif; line-height: 1.6; padding: 20px; max-width: 800px; margin: auto; }
+        input { width: 100%; padding: 10px; font-size: 16px; }
+        button { width: 100%; padding: 10px; margin-top: 10px; background-color: #007bff; color: white; border: none; font-size: 16px; cursor: pointer; }
+        button:disabled { background-color: #ccc; }
+        #summary { margin-top: 20px; padding: 15px; border: 1px solid #ddd; background-color: #f9f9f9; white-space: pre-wrap; }
+    </style>
+</head>
+<body>
+    <h1>AI Chemist 🧪</h1>
+    <p>Enter a research field to get a summary of the latest literature.</p>
+
+    <input type="text" id="topic-input" placeholder="e.g., developing new kinase inhibitors for oncology">
+    <button id="search-button" onclick="fetchSummary()">Search</button>
+
+    <div id="summary">Your AI-generated summary will appear here...</div>
+
+    <script>
+        const topicInput = document.getElementById('topic-input');
+        const searchButton = document.getElementById('search-button');
+        const summaryDiv = document.getElementById('summary');
+
+        async function fetchSummary() {
+            const topic = topicInput.value.trim();
+            if (!topic) {
+                alert('Please enter a topic.');
+                return;
+            }
+
+            // Disable button and show loading message
+            searchButton.disabled = true;
+            searchButton.innerText = 'Searching...';
+            summaryDiv.innerText = 'Finding papers and generating your summary... this may take a moment.';
+
+            try {
+                // Make the API call to our FastAPI backend
+                const response = await fetch(`http://127.0.0.1:8000/api/summarize?topic=${encodeURIComponent(topic)}`);
+
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+
+                const data = await response.json();
+                summaryDiv.innerText = data.summary;
+
+            } catch (error) {
+                console.error('Fetch error:', error);
+                summaryDiv.innerText = 'An error occurred. Please check the console and make sure your backend server is running.';
+            } finally {
+                // Re-enable the button
+                searchButton.disabled = false;
+                searchButton.innerText = 'Search';
+            }
+        }
+    </script>
+</body>
+</html>
