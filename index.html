@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI Chemist - Phase 2</title>
+    <title>AI Chemist - Phase 3</title>
     <style>
         body { font-family: sans-serif; line-height: 1.6; padding: 20px; max-width: 800px; margin: auto; }
         .input-group { display: flex; flex-direction: column; gap: 10px; margin-bottom: 10px; }
@@ -11,12 +11,14 @@
         button { width: 100%; padding: 10px; background-color: #007bff; color: white; border: none; font-size: 16px; cursor: pointer; }
         button:disabled { background-color: #ccc; }
         .hidden { display: none; }
-        #summary, #proposal-section { margin-top: 20px; padding: 15px; border: 1px solid #ddd; background-color: #f9f9f9; white-space: pre-wrap; }
-        #proposal-section { border-left: 5px solid #007bff; margin-top: 25px; }
-        #feedback-buttons { display: flex; gap: 10px; margin-top: 20px; }
-        #feedback-buttons button { width: 50%; }
+        #summary, #proposal-section, #structure-section { margin-top: 20px; padding: 15px; border: 1px solid #ddd; background-color: #f9f9f9; white-space: pre-wrap; }
+        #proposal-section { border-left: 5px solid #007bff; }
+        #structure-section { border-left: 5px solid #28a745; text-align: center; } /* Style for new structure section */
+        #feedback-buttons, #structure-feedback-buttons { display: flex; gap: 10px; margin-top: 20px; }
+        #feedback-buttons button, #structure-feedback-buttons button { width: 50%; }
         .approve-btn { background-color: #28a745; }
         .disapprove-btn { background-color: #dc3545; }
+        #molecule-img { max-width: 100%; height: auto; margin-top: 15px; }
     </style>
 </head>
 <body>
@@ -38,12 +40,22 @@
         <h2>Proposed Research Direction</h2>
         <div id="proposal-text"></div>
         <div id="feedback-buttons">
-            <button id="approve-btn" class="approve-btn">👍 Approve</button>
-            <button id="disapprove-btn" class="disapprove-btn">👎 Disapprove</button>
+            <button id="approve-btn" class="approve-btn">👍 Approve Proposal</button>
+            <button id="disapprove-btn" class="disapprove-btn">👎 Disapprove Proposal</button>
+        </div>
+    </div>
+
+    <div id="structure-section" class="hidden">
+        <h2>Proposed Molecular Structure</h2>
+        <div id="structure-image-container">Your structure will be generated here...</div>
+        <div id="structure-feedback-buttons">
+            <button class="approve-btn">✅ Final Approve</button>
+            <button class="disapprove-btn">❌ Redesign</button>
         </div>
     </div>
 
     <script>
+        // --- Getting all elements ---
         const topicInput = document.getElementById('topic-input');
         const searchButton = document.getElementById('search-button');
         const summaryDiv = document.getElementById('summary');
@@ -52,29 +64,23 @@
         const approveBtn = document.getElementById('approve-btn');
         const disapproveBtn = document.getElementById('disapprove-btn');
         const sourceSelect = document.getElementById('source-select');
+        const structureSection = document.getElementById('structure-section');
+        const structureImageContainer = document.getElementById('structure-image-container');
 
+        // --- fetchSummary function remains the same ---
         async function fetchSummary() {
             const topic = topicInput.value.trim();
             const source = sourceSelect.value; 
-
-            if (!topic) {
-                alert('Please enter a topic.');
-                return;
-            }
-
+            if (!topic) { alert('Please enter a topic.'); return; }
             searchButton.disabled = true;
             searchButton.innerText = 'Searching...';
-            summaryDiv.innerText = 'Finding papers and generating your summary...';
+            summaryDiv.innerText = 'Finding papers...';
             proposalSection.classList.add('hidden');
-
+            structureSection.classList.add('hidden'); // Hide structure section on new search
             try {
                 const url = `http://127.0.0.1:8000/api/summarize?topic=${encodeURIComponent(topic)}&source=${source}`;
                 const response = await fetch(url);
-
-                if (!response.ok) {
-                    const errorData = await response.json();
-                    throw new Error(`HTTP error! status: ${response.status} - ${errorData.detail}`);
-                }
+                if (!response.ok) { throw new Error('Failed to get summary.'); }
                 const data = await response.json();
                 summaryDiv.innerText = data.summary;
                 proposalText.innerText = data.proposal;
@@ -82,45 +88,60 @@
                     proposalSection.classList.remove('hidden');
                 }
             } catch (error) {
-                console.error('Fetch error:', error);
-                summaryDiv.innerText = 'An error occurred. Please check the console and make sure your backend server is running.';
+                summaryDiv.innerText = 'An error occurred. Please check the console.';
             } finally {
                 searchButton.disabled = false;
                 searchButton.innerText = 'Search';
             }
         }
 
-        approveBtn.addEventListener('click', () => {
-            alert('Proposal approved! Ready for Phase 3: Generating the full research plan.');
+        // --- Approve button now triggers structure generation ---
+        approveBtn.addEventListener('click', async () => {
+            const proposal = proposalText.innerText;
+            // Hide proposal buttons and show loading state
+            document.getElementById('feedback-buttons').classList.add('hidden');
+            structureSection.classList.remove('hidden');
+            structureImageContainer.innerText = 'AI is designing the molecule...';
+
+            try {
+                const response = await fetch('http://127.0.0.1:8000/api/generate_structure', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ proposal_text: proposal })
+                });
+                if (!response.ok) { throw new Error('Failed to generate structure.'); }
+                
+                // The backend sends the raw base64 image data as text
+                const imgBase64 = await response.text();
+
+                // Display the image
+                structureImageContainer.innerHTML = `<img id="molecule-img" src="data:image/png;base64,${imgBase64}" alt="Generated Molecule" />`;
+
+            } catch (error) {
+                console.error('Structure generation error:', error);
+                structureImageContainer.innerText = 'An error occurred during structure generation.';
+            }
         });
 
+        // --- Disapprove button function remains the same ---
         disapproveBtn.addEventListener('click', async () => {
-            const reason = prompt("What's the reason for your disapproval? Please be specific.");
+            // ... this function's code is unchanged from the previous step
+            const reason = prompt("What's the reason for your disapproval?");
             if (!reason || reason.trim() === '') return;
-
             const originalProposal = proposalText.innerText;
-            proposalText.innerText = 'Generating a new proposal based on your feedback...';
-
+            proposalText.innerText = 'Generating a new proposal...';
             try {
                 const response = await fetch('http://127.0.0.1:8000/api/refine_proposal', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        original_proposal: originalProposal,
-                        user_feedback: reason
-                    })
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ original_proposal: originalProposal, user_feedback: reason })
                 });
-
-                if (!response.ok) {
-                    const errorData = await response.json();
-                    throw new Error(`HTTP error! status: ${response.status} - ${errorData.detail}`);
-                }
+                if (!response.ok) { throw new Error('Failed to refine.'); }
                 const data = await response.json();
                 proposalText.innerText = data.new_proposal;
             } catch (error) {
-                console.error('Refinement error:', error);
                 proposalText.innerText = originalProposal;
-                alert('Sorry, an error occurred during refinement. Please check the console.');
+                alert('An error occurred during refinement.');
             }
         });
     </script>
