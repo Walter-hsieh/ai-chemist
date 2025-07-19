@@ -6,48 +6,30 @@
     <title>AI Chemist - Phase 2</title>
     <style>
         body { font-family: sans-serif; line-height: 1.6; padding: 20px; max-width: 800px; margin: auto; }
-        input { width: 100%; padding: 10px; font-size: 16px; box-sizing: border-box; }
-        button { width: 100%; padding: 10px; margin-top: 10px; background-color: #007bff; color: white; border: none; font-size: 16px; cursor: pointer; }
+        .input-group { display: flex; flex-direction: column; gap: 10px; margin-bottom: 10px; }
+        input, select { width: 100%; padding: 10px; font-size: 16px; box-sizing: border-box; }
+        button { width: 100%; padding: 10px; background-color: #007bff; color: white; border: none; font-size: 16px; cursor: pointer; }
         button:disabled { background-color: #ccc; }
-        
-        /* Added a hidden utility class */
         .hidden { display: none; }
-
-        #summary, #proposal-section {
-            margin-top: 20px;
-            padding: 15px;
-            border: 1px solid #ddd;
-            background-color: #f9f9f9;
-            white-space: pre-wrap; /* This preserves formatting like newlines */
-        }
-
-        /* Style for the new proposal section */
-        #proposal-section {
-            border-left: 5px solid #007bff;
-            margin-top: 25px;
-        }
-
-        /* Style for the feedback button container */
-        #feedback-buttons {
-            display: flex;
-            gap: 10px; /* Adds space between buttons */
-            margin-top: 20px;
-        }
-
-        #feedback-buttons button {
-            width: 50%;
-        }
-
+        #summary, #proposal-section { margin-top: 20px; padding: 15px; border: 1px solid #ddd; background-color: #f9f9f9; white-space: pre-wrap; }
+        #proposal-section { border-left: 5px solid #007bff; margin-top: 25px; }
+        #feedback-buttons { display: flex; gap: 10px; margin-top: 20px; }
+        #feedback-buttons button { width: 50%; }
         .approve-btn { background-color: #28a745; }
         .disapprove-btn { background-color: #dc3545; }
-
     </style>
 </head>
 <body>
     <h1>AI Chemist 🧪</h1>
-    <p>Enter a research field to get a summary of the latest literature.</p>
+    <p>Enter a research field and choose a data source to get a summary of the latest literature.</p>
 
-    <input type="text" id="topic-input" placeholder="e.g., developing new kinase inhibitors for oncology">
+    <div class="input-group">
+        <select id="source-select">
+            <option value="semantic">Use Semantic Scholar</option>
+            <option value="arxiv">Use arXiv</option>
+        </select>
+        <input type="text" id="topic-input" placeholder="e.g., carbon capture or quantum computing">
+    </div>
     <button id="search-button" onclick="fetchSummary()">Search</button>
 
     <div id="summary">Your AI-generated summary will appear here...</div>
@@ -56,65 +38,91 @@
         <h2>Proposed Research Direction</h2>
         <div id="proposal-text"></div>
         <div id="feedback-buttons">
-            <button class="approve-btn">👍 Approve</button>
-            <button class="disapprove-btn">👎 Disapprove</button>
+            <button id="approve-btn" class="approve-btn">👍 Approve</button>
+            <button id="disapprove-btn" class="disapprove-btn">👎 Disapprove</button>
         </div>
     </div>
-
 
     <script>
         const topicInput = document.getElementById('topic-input');
         const searchButton = document.getElementById('search-button');
         const summaryDiv = document.getElementById('summary');
-
-        // Get the new elements
         const proposalSection = document.getElementById('proposal-section');
         const proposalText = document.getElementById('proposal-text');
+        const approveBtn = document.getElementById('approve-btn');
+        const disapproveBtn = document.getElementById('disapprove-btn');
+        const sourceSelect = document.getElementById('source-select');
 
         async function fetchSummary() {
             const topic = topicInput.value.trim();
+            const source = sourceSelect.value; 
+
             if (!topic) {
                 alert('Please enter a topic.');
                 return;
             }
 
-            // Disable button and show loading message
             searchButton.disabled = true;
             searchButton.innerText = 'Searching...';
-            summaryDiv.innerText = 'Finding papers and generating your summary... this may take a moment.';
-
-            // --- HIDE the proposal section at the start of a new search ---
+            summaryDiv.innerText = 'Finding papers and generating your summary...';
             proposalSection.classList.add('hidden');
 
             try {
-                // Make the API call to our FastAPI backend
-                const response = await fetch(`http://127.0.0.1:8000/api/summarize?topic=${encodeURIComponent(topic)}`);
+                const url = `http://127.0.0.1:8000/api/summarize?topic=${encodeURIComponent(topic)}&source=${source}`;
+                const response = await fetch(url);
 
                 if (!response.ok) {
                     const errorData = await response.json();
                     throw new Error(`HTTP error! status: ${response.status} - ${errorData.detail}`);
                 }
-
                 const data = await response.json();
-
-                // --- UPDATE BOTH the summary and the new proposal text ---
                 summaryDiv.innerText = data.summary;
                 proposalText.innerText = data.proposal;
-
-                // --- SHOW the proposal section if we got a proposal ---
                 if (data.proposal) {
                     proposalSection.classList.remove('hidden');
                 }
-
             } catch (error) {
                 console.error('Fetch error:', error);
                 summaryDiv.innerText = 'An error occurred. Please check the console and make sure your backend server is running.';
             } finally {
-                // Re-enable the button
                 searchButton.disabled = false;
                 searchButton.innerText = 'Search';
             }
         }
+
+        approveBtn.addEventListener('click', () => {
+            alert('Proposal approved! Ready for Phase 3: Generating the full research plan.');
+        });
+
+        disapproveBtn.addEventListener('click', async () => {
+            const reason = prompt("What's the reason for your disapproval? Please be specific.");
+            if (!reason || reason.trim() === '') return;
+
+            const originalProposal = proposalText.innerText;
+            proposalText.innerText = 'Generating a new proposal based on your feedback...';
+
+            try {
+                const response = await fetch('http://127.0.0.1:8000/api/refine_proposal', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        original_proposal: originalProposal,
+                        user_feedback: reason
+                    })
+                });
+
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(`HTTP error! status: ${response.status} - ${errorData.detail}`);
+                }
+                const data = await response.json();
+                proposalText.innerText = data.new_proposal;
+            } catch (error) {
+                console.error('Refinement error:', error);
+                proposalText.innerText = originalProposal;
+                alert('Sorry, an error occurred during refinement. Please check the console.');
+            }
+        });
     </script>
 </body>
 </html>
