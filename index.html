@@ -3,13 +3,44 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI Chemist - Phase 1</title>
+    <title>AI Chemist - Phase 2</title>
     <style>
         body { font-family: sans-serif; line-height: 1.6; padding: 20px; max-width: 800px; margin: auto; }
-        input { width: 100%; padding: 10px; font-size: 16px; }
+        input { width: 100%; padding: 10px; font-size: 16px; box-sizing: border-box; }
         button { width: 100%; padding: 10px; margin-top: 10px; background-color: #007bff; color: white; border: none; font-size: 16px; cursor: pointer; }
         button:disabled { background-color: #ccc; }
-        #summary { margin-top: 20px; padding: 15px; border: 1px solid #ddd; background-color: #f9f9f9; white-space: pre-wrap; }
+        
+        /* Added a hidden utility class */
+        .hidden { display: none; }
+
+        #summary, #proposal-section {
+            margin-top: 20px;
+            padding: 15px;
+            border: 1px solid #ddd;
+            background-color: #f9f9f9;
+            white-space: pre-wrap; /* This preserves formatting like newlines */
+        }
+
+        /* Style for the new proposal section */
+        #proposal-section {
+            border-left: 5px solid #007bff;
+            margin-top: 25px;
+        }
+
+        /* Style for the feedback button container */
+        #feedback-buttons {
+            display: flex;
+            gap: 10px; /* Adds space between buttons */
+            margin-top: 20px;
+        }
+
+        #feedback-buttons button {
+            width: 50%;
+        }
+
+        .approve-btn { background-color: #28a745; }
+        .disapprove-btn { background-color: #dc3545; }
+
     </style>
 </head>
 <body>
@@ -21,10 +52,24 @@
 
     <div id="summary">Your AI-generated summary will appear here...</div>
 
+    <div id="proposal-section" class="hidden">
+        <h2>Proposed Research Direction</h2>
+        <div id="proposal-text"></div>
+        <div id="feedback-buttons">
+            <button class="approve-btn">👍 Approve</button>
+            <button class="disapprove-btn">👎 Disapprove</button>
+        </div>
+    </div>
+
+
     <script>
         const topicInput = document.getElementById('topic-input');
         const searchButton = document.getElementById('search-button');
         const summaryDiv = document.getElementById('summary');
+
+        // Get the new elements
+        const proposalSection = document.getElementById('proposal-section');
+        const proposalText = document.getElementById('proposal-text');
 
         async function fetchSummary() {
             const topic = topicInput.value.trim();
@@ -38,16 +83,28 @@
             searchButton.innerText = 'Searching...';
             summaryDiv.innerText = 'Finding papers and generating your summary... this may take a moment.';
 
+            // --- HIDE the proposal section at the start of a new search ---
+            proposalSection.classList.add('hidden');
+
             try {
                 // Make the API call to our FastAPI backend
                 const response = await fetch(`http://127.0.0.1:8000/api/summarize?topic=${encodeURIComponent(topic)}`);
 
                 if (!response.ok) {
-                    throw new Error(`HTTP error! status: ${response.status}`);
+                    const errorData = await response.json();
+                    throw new Error(`HTTP error! status: ${response.status} - ${errorData.detail}`);
                 }
 
                 const data = await response.json();
+
+                // --- UPDATE BOTH the summary and the new proposal text ---
                 summaryDiv.innerText = data.summary;
+                proposalText.innerText = data.proposal;
+
+                // --- SHOW the proposal section if we got a proposal ---
+                if (data.proposal) {
+                    proposalSection.classList.remove('hidden');
+                }
 
             } catch (error) {
                 console.error('Fetch error:', error);
