@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI Chemist - Phase 3</title>
+    <title>AI Chemist - Final</title>
     <style>
         body { font-family: sans-serif; line-height: 1.6; padding: 20px; max-width: 800px; margin: auto; }
         .input-group { display: flex; flex-direction: column; gap: 10px; margin-bottom: 10px; }
@@ -11,19 +11,21 @@
         button { width: 100%; padding: 10px; background-color: #007bff; color: white; border: none; font-size: 16px; cursor: pointer; }
         button:disabled { background-color: #ccc; }
         .hidden { display: none; }
-        #summary, #proposal-section, #structure-section { margin-top: 20px; padding: 15px; border: 1px solid #ddd; background-color: #f9f9f9; white-space: pre-wrap; }
+        #summary, #proposal-section, #structure-section, #final-proposal-section { margin-top: 20px; padding: 15px; border: 1px solid #ddd; background-color: #f9f9f9; white-space: pre-wrap; }
         #proposal-section { border-left: 5px solid #007bff; }
-        #structure-section { border-left: 5px solid #28a745; text-align: center; } /* Style for new structure section */
+        #structure-section { border-left: 5px solid #28a745; text-align: center; }
+        #final-proposal-section { border-left: 5px solid #ffc107; }
         #feedback-buttons, #structure-feedback-buttons { display: flex; gap: 10px; margin-top: 20px; }
         #feedback-buttons button, #structure-feedback-buttons button { width: 50%; }
         .approve-btn { background-color: #28a745; }
         .disapprove-btn { background-color: #dc3545; }
         #molecule-img { max-width: 100%; height: auto; margin-top: 15px; }
+        .download-link { display: block; margin-top: 10px; font-size: 1.1em; }
     </style>
 </head>
 <body>
     <h1>AI Chemist 🧪</h1>
-    <p>Enter a research field and choose a data source to get a summary of the latest literature.</p>
+    <p>Enter a research field to generate a complete research proposal.</p>
 
     <div class="input-group">
         <select id="source-select">
@@ -34,8 +36,7 @@
     </div>
     <button id="search-button" onclick="fetchSummary()">Search</button>
 
-    <div id="summary">Your AI-generated summary will appear here...</div>
-
+    <div id="summary" class="hidden"></div>
     <div id="proposal-section" class="hidden">
         <h2>Proposed Research Direction</h2>
         <div id="proposal-text"></div>
@@ -44,17 +45,29 @@
             <button id="disapprove-btn" class="disapprove-btn">👎 Disapprove Proposal</button>
         </div>
     </div>
-
     <div id="structure-section" class="hidden">
         <h2>Proposed Molecular Structure</h2>
-        <div id="structure-image-container">Your structure will be generated here...</div>
+        <div id="structure-image-container"></div>
         <div id="structure-feedback-buttons">
-            <button class="approve-btn">✅ Final Approve</button>
-            <button class="disapprove-btn">❌ Redesign</button>
+            <button id="final-approve-btn" class="approve-btn">✅ Final Approve & Generate Docs</button>
+            <button id="redesign-btn" class="disapprove-btn">❌ Redesign Molecule</button>
         </div>
+    </div>
+    
+    <div id="final-proposal-section" class="hidden">
+        <h2>Project Proposal & Downloads</h2>
+        <div id="download-links"></div>
+        <hr>
+        <h3>Full Proposal Text:</h3>
+        <div id="full-proposal-text"></div>
     </div>
 
     <script>
+        // --- State variables to hold data between steps ---
+        let currentSummary = "";
+        let currentProposal = "";
+        let currentSmiles = "";
+
         // --- Getting all elements ---
         const topicInput = document.getElementById('topic-input');
         const searchButton = document.getElementById('search-button');
@@ -66,27 +79,41 @@
         const sourceSelect = document.getElementById('source-select');
         const structureSection = document.getElementById('structure-section');
         const structureImageContainer = document.getElementById('structure-image-container');
+        const finalApproveBtn = document.getElementById('final-approve-btn');
+        const redesignBtn = document.getElementById('redesign-btn');
+        const finalProposalSection = document.getElementById('final-proposal-section');
+        const downloadLinks = document.getElementById('download-links');
+        const fullProposalText = document.getElementById('full-proposal-text');
 
-        // --- fetchSummary function remains the same ---
+        // --- Main Search Function ---
         async function fetchSummary() {
             const topic = topicInput.value.trim();
             const source = sourceSelect.value; 
-            if (!topic) { alert('Please enter a topic.'); return; }
+            if (!topic) { return alert('Please enter a topic.'); }
+            
+            // Reset UI
             searchButton.disabled = true;
             searchButton.innerText = 'Searching...';
+            [summaryDiv, proposalSection, structureSection, finalProposalSection].forEach(el => el.classList.add('hidden'));
+            document.getElementById('feedback-buttons').classList.remove('hidden');
+            document.getElementById('structure-feedback-buttons').classList.remove('hidden');
+            summaryDiv.classList.remove('hidden');
             summaryDiv.innerText = 'Finding papers...';
-            proposalSection.classList.add('hidden');
-            structureSection.classList.add('hidden'); // Hide structure section on new search
+            
             try {
                 const url = `http://127.0.0.1:8000/api/summarize?topic=${encodeURIComponent(topic)}&source=${source}`;
                 const response = await fetch(url);
-                if (!response.ok) { throw new Error('Failed to get summary.'); }
+                if (!response.ok) throw new Error('Failed to get summary.');
                 const data = await response.json();
-                summaryDiv.innerText = data.summary;
-                proposalText.innerText = data.proposal;
-                if (data.proposal) {
-                    proposalSection.classList.remove('hidden');
-                }
+                
+                currentSummary = data.summary;
+                currentProposal = data.proposal;
+                
+                summaryDiv.innerText = currentSummary;
+                proposalText.innerText = currentProposal;
+                
+                if (data.proposal) proposalSection.classList.remove('hidden');
+
             } catch (error) {
                 summaryDiv.innerText = 'An error occurred. Please check the console.';
             } finally {
@@ -94,55 +121,103 @@
                 searchButton.innerText = 'Search';
             }
         }
-
-        // --- Approve button now triggers structure generation ---
+        
+        // --- Event Listener for First Approval -> Generate Structure ---
         approveBtn.addEventListener('click', async () => {
-            const proposal = proposalText.innerText;
-            // Hide proposal buttons and show loading state
             document.getElementById('feedback-buttons').classList.add('hidden');
             structureSection.classList.remove('hidden');
             structureImageContainer.innerText = 'AI is designing the molecule...';
-
             try {
                 const response = await fetch('http://127.0.0.1:8000/api/generate_structure', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ proposal_text: proposal })
+                    body: JSON.stringify({ proposal_text: currentProposal })
                 });
-                if (!response.ok) { throw new Error('Failed to generate structure.'); }
+                if (!response.ok) throw new Error('Failed to generate structure.');
                 
-                // The backend sends the raw base64 image data as text
-                const imgBase64 = await response.text();
-
-                // Display the image
-                structureImageContainer.innerHTML = `<img id="molecule-img" src="data:image/png;base64,${imgBase64}" alt="Generated Molecule" />`;
-
+                const data = await response.json();
+                currentSmiles = data.smiles;
+                
+                structureImageContainer.innerHTML = `<img id="molecule-img" src="data:image/png;base64,${data.image}" alt="Generated Molecule" />`;
             } catch (error) {
-                console.error('Structure generation error:', error);
                 structureImageContainer.innerText = 'An error occurred during structure generation.';
             }
         });
+        
+        // --- Final Approve Button -> Generate All Documents ---
+        finalApproveBtn.addEventListener('click', async () => {
+            document.getElementById('structure-feedback-buttons').classList.add('hidden');
+            finalProposalSection.classList.remove('hidden');
+            downloadLinks.innerText = "Generating all project documents, please wait...";
 
-        // --- Disapprove button function remains the same ---
+            try {
+                const response = await fetch('http://127.0.0.1:8000/api/generate_proposal', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        summary_text: currentSummary,
+                        proposal_text: currentProposal,
+                        smiles_string: currentSmiles
+                    })
+                });
+                if (!response.ok) throw new Error('Failed to generate final proposal.');
+
+                const data = await response.json();
+
+                fullProposalText.innerText = data.full_proposal_text;
+
+                const recipeUrl = `data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,${data.recipe_file}`;
+                const dataUrl = `data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,${data.data_template_file}`;
+                const docxUrl = `data:application/vnd.openxmlformats-officedocument.wordprocessingml.document;base64,${data.proposal_docx_file}`;
+                
+                downloadLinks.innerHTML = `
+                    <a href="${docxUrl}" class="download-link" download="Research_Proposal.docx">Download Proposal (.docx)</a>
+                    <a href="${recipeUrl}" class="download-link" download="Synthesis_Recipe.xlsx">Download Synthesis Recipe (.xlsx)</a>
+                    <a href="${dataUrl}" class="download-link" download="Data_Recording_Template.xlsx">Download Data Template (.xlsx)</a>
+                `;
+
+            } catch (error) {
+                console.error("Final proposal error:", error);
+                downloadLinks.innerText = "An error occurred generating the final documents.";
+            }
+        });
+
+        // --- Disapprove and Redesign Listeners ---
         disapproveBtn.addEventListener('click', async () => {
-            // ... this function's code is unchanged from the previous step
-            const reason = prompt("What's the reason for your disapproval?");
+            const reason = prompt("What's the reason for your disapproval? Please be specific.");
             if (!reason || reason.trim() === '') return;
+
             const originalProposal = proposalText.innerText;
-            proposalText.innerText = 'Generating a new proposal...';
+            proposalText.innerText = 'Generating a new proposal based on your feedback...';
+
             try {
                 const response = await fetch('http://127.0.0.1:8000/api/refine_proposal', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ original_proposal: originalProposal, user_feedback: reason })
+                    body: JSON.stringify({
+                        original_proposal: originalProposal,
+                        user_feedback: reason
+                    })
                 });
-                if (!response.ok) { throw new Error('Failed to refine.'); }
+
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(`HTTP error! status: ${response.status} - ${errorData.detail}`);
+                }
                 const data = await response.json();
+                currentProposal = data.new_proposal;
                 proposalText.innerText = data.new_proposal;
             } catch (error) {
+                console.error('Refinement error:', error);
                 proposalText.innerText = originalProposal;
-                alert('An error occurred during refinement.');
+                alert('Sorry, an error occurred during refinement.');
             }
+        });
+        
+        redesignBtn.addEventListener('click', () => {
+             alert("To redesign the molecule, please click 'Disapprove Proposal' again with new feedback about the desired chemical properties. A new structure will be generated when you approve the resulting text proposal.");
+             document.getElementById('feedback-buttons').classList.remove('hidden');
+             structureSection.classList.add('hidden');
         });
     </script>
 </body>

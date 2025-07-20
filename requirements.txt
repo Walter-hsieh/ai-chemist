@@ -1,0 +1,8 @@
+fastapi
+uvicorn
+requests
+python-dotenv
+google-generativeai
+rdkit
+openpyxl
+python-docx
