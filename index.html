@@ -85,6 +85,7 @@
         let currentSummary = "";
         let currentProposal = "";
         let currentSmiles = "";
+        let currentStructureImage = ""; // <-- ADD THIS
 
         // --- Getting all element references ---
         const allElements = {
@@ -227,8 +228,10 @@
                 
                 const data = await response.json();
                 currentSmiles = data.smiles;
+                const imageUrl = `data:image/png;base64,${data.image}`;
+                currentStructureImage = imageUrl; // <-- STORE IMAGE DATA URL
                 
-                allElements.structureImageContainer.innerHTML = `<img id="molecule-img" src="data:image/png;base64,${data.image}" alt="Generated Molecule" />`;
+                allElements.structureImageContainer.innerHTML = `<img id="molecule-img" src="${imageUrl}" alt="Generated Molecule" />`;
             } catch (error) {
                 allElements.structureImageContainer.innerText = `An error occurred: ${error.message}`;
             }
@@ -251,6 +254,7 @@
                         summary_text: currentSummary,
                         proposal_text: currentProposal,
                         smiles_string: currentSmiles,
+                        structure_image_base64: currentStructureImage, // <-- SEND IMAGE DATA
                         api_key: apiKey
                     })
                 });
