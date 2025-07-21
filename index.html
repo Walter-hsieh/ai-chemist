@@ -9,6 +9,7 @@
         .input-group { display: flex; flex-direction: column; gap: 10px; margin-bottom: 20px; }
         input, select, button { width: 100%; padding: 10px; font-size: 16px; box-sizing: border-box; border-radius: 5px; border: 1px solid #ccc;}
         .api-key-input { border-left: 3px solid #f0ad4e; }
+        .model-input { border-left: 3px solid #17a2b8; }
         button { background-color: #007bff; color: white; border: none; cursor: pointer; transition: background-color 0.2s; }
         button:hover { background-color: #0056b3; }
         button:disabled { background-color: #ccc; cursor: not-allowed; }
@@ -37,6 +38,7 @@
 
     <div class="input-group">
         <input type="password" id="gemini-api-key" class="api-key-input" placeholder="Enter your Gemini API Key here">
+        <input type="text" id="model-name-input" class="model-input" placeholder="Optional: Enter Model Name (e.g., gemini-1.5-pro)">
         <select id="source-select">
             <option value="semantic">Use Semantic Scholar</option>
             <option value="arxiv">Use arXiv</option>
@@ -85,7 +87,7 @@
         let currentSummary = "";
         let currentProposal = "";
         let currentSmiles = "";
-        let currentStructureImage = ""; // <-- ADD THIS
+        let currentStructureImage = "";
 
         // --- Getting all element references ---
         const allElements = {
@@ -105,12 +107,13 @@
             downloadLinks: document.getElementById('download-links'),
             fullProposalText: document.getElementById('full-proposal-text'),
             apiKeyInput: document.getElementById('gemini-api-key'),
+            modelNameInput: document.getElementById('model-name-input'),
             localKnowledgeSection: document.getElementById('local-knowledge-section'),
             fileUpload: document.getElementById('file-upload'),
             uploadButton: document.getElementById('upload-button')
         };
 
-        // --- Helper function to get API Key ---
+        // --- Helper functions to get user inputs ---
         function getApiKey() {
             const apiKey = allElements.apiKeyInput.value.trim();
             if (!apiKey) {
@@ -118,6 +121,11 @@
                 return null;
             }
             return apiKey;
+        }
+
+        function getModelName() {
+            // Return the user's model name or an empty string to let the backend use the default
+            return allElements.modelNameInput.value.trim();
         }
 
         // --- UI Logic for showing/hiding upload section ---
@@ -170,10 +178,10 @@
             if (!apiKey) return;
 
             const topic = allElements.topicInput.value.trim();
-            const source = allElements.sourceSelect.value; 
+            const source = allElements.sourceSelect.value;
+            const modelName = getModelName();
             if (!topic) { return alert('Please enter a topic to guide the research.'); }
             
-            // Reset UI
             allElements.searchButton.disabled = true;
             allElements.searchButton.innerText = 'Searching...';
             [allElements.summaryDiv, allElements.proposalSection, allElements.structureSection, allElements.finalProposalSection].forEach(el => el.classList.add('hidden'));
@@ -183,7 +191,7 @@
             allElements.summaryDiv.innerText = 'Analyzing literature...';
             
             try {
-                const url = `http://127.0.0.1:8000/api/summarize?topic=${encodeURIComponent(topic)}&source=${source}&api_key=${apiKey}`;
+                const url = `http://127.0.0.1:8000/api/summarize?topic=${encodeURIComponent(topic)}&source=${source}&api_key=${apiKey}&model_name=${encodeURIComponent(modelName)}`;
                 const response = await fetch(url);
                 if (!response.ok) {
                     const errorData = await response.json();
@@ -219,7 +227,11 @@
                 const response = await fetch('http://127.0.0.1:8000/api/generate_structure', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ proposal_text: currentProposal, api_key: apiKey })
+                    body: JSON.stringify({ 
+                        proposal_text: currentProposal, 
+                        api_key: apiKey,
+                        model_name: getModelName()
+                    })
                 });
                 if (!response.ok) {
                     const errorData = await response.json();
@@ -229,7 +241,7 @@
                 const data = await response.json();
                 currentSmiles = data.smiles;
                 const imageUrl = `data:image/png;base64,${data.image}`;
-                currentStructureImage = imageUrl; // <-- STORE IMAGE DATA URL
+                currentStructureImage = imageUrl;
                 
                 allElements.structureImageContainer.innerHTML = `<img id="molecule-img" src="${imageUrl}" alt="Generated Molecule" />`;
             } catch (error) {
@@ -254,8 +266,9 @@
                         summary_text: currentSummary,
                         proposal_text: currentProposal,
                         smiles_string: currentSmiles,
-                        structure_image_base64: currentStructureImage, // <-- SEND IMAGE DATA
-                        api_key: apiKey
+                        structure_image_base64: currentStructureImage,
+                        api_key: apiKey,
+                        model_name: getModelName()
                     })
                 });
                 if (!response.ok) {
@@ -301,7 +314,8 @@
                     body: JSON.stringify({
                         original_proposal: originalProposal,
                         user_feedback: reason,
-                        api_key: apiKey
+                        api_key: apiKey,
+                        model_name: getModelName()
                     })
                 });
 

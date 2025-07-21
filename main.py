@@ -7,14 +7,14 @@ from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from dotenv import load_dotenv
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from rdkit import Chem
 from rdkit.Chem import Draw
 import io
 import base64
 import openpyxl
 from docx import Document
-from docx.shared import Inches # <-- IMPORT THIS
+from docx.shared import Inches
 from google.generativeai.types import HarmCategory, HarmBlockThreshold
 import shutil
 from typing import List
@@ -33,17 +33,23 @@ class RefineRequest(BaseModel):
     original_proposal: str
     user_feedback: str
     api_key: str
+    model_name: str = Field("gemini-2.5-flash", alias="model_name")
+
 
 class StructureRequest(BaseModel):
     proposal_text: str
     api_key: str
+    model_name: str = Field("gemini-2.5-flash", alias="model_name")
+
 
 class FinalProposalRequest(BaseModel):
     summary_text: str
     proposal_text: str
     smiles_string: str
-    structure_image_base64: str # <-- ADD THIS
+    structure_image_base64: str
     api_key: str
+    model_name: str = Field("gemini-2.5-flash", alias="model_name")
+
 
 # --- FastAPI App Setup ---
 app = FastAPI()
@@ -176,11 +182,12 @@ async def upload_files(files: List[UploadFile] = File(...)):
 
 
 @app.get("/api/summarize")
-def get_summary(topic: str, source: str, api_key: str):
+def get_summary(topic: str, source: str, api_key: str, model_name: str = "gemini-2.5-flash"):
     """Generates the initial literature summary and research proposal."""
     try:
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-2.5-flash')
+        # Use the provided model name, or default to flash
+        model = genai.GenerativeModel(model_name or 'gemini-2.5-flash')
         
         papers = []
         if source == 'local':
@@ -197,7 +204,6 @@ def get_summary(topic: str, source: str, api_key: str):
         
         abstracts_text = "\n\n---\n\n".join(f"Title: {p['title']}\nAbstract: {p['abstract']}" for p in papers)
         
-        # For local knowledge, the prompt is slightly different
         if source == 'local':
             summary_prompt = f"Summarize the key findings and themes from the following documents for a chemist. The user is interested in the topic: '{topic}'.\n\n{abstracts_text}"
         else:
@@ -216,7 +222,7 @@ def refine_proposal(request: RefineRequest):
     """Generates a new proposal based on user feedback."""
     try:
         genai.configure(api_key=request.api_key)
-        model = genai.GenerativeModel('gemini-2.5-flash')
+        model = genai.GenerativeModel(request.model_name or 'gemini-2.5-flash')
         
         refine_prompt = f"A user disliked a proposal for this reason: '{request.user_feedback}'. Original proposal: '{request.original_proposal}'. Generate a new proposal."
         response = model.generate_content(refine_prompt, safety_settings=safety_settings)
@@ -228,7 +234,7 @@ def generate_structure(request: StructureRequest):
     """Generates a chemical structure image from a text proposal."""
     try:
         genai.configure(api_key=request.api_key)
-        model = genai.GenerativeModel('gemini-2.5-flash')
+        model = genai.GenerativeModel(request.model_name or 'gemini-2.5-flash')
         
         for attempt in range(3):
             smiles_prompt = f"Based on this proposal, generate a plausible SMILES string. Respond with ONLY the SMILES string. Proposal:\n{request.proposal_text}"
@@ -249,7 +255,7 @@ def generate_final_proposal(request: FinalProposalRequest):
     """Generates the full suite of downloadable proposal documents."""
     try:
         genai.configure(api_key=request.api_key)
-        model = genai.GenerativeModel('gemini-2.5-flash')
+        model = genai.GenerativeModel(request.model_name or 'gemini-2.5-flash')
         
         full_proposal_prompt = f"You are a PhD chemist writing a research proposal... CONTEXT: ... {request.summary_text} ... {request.proposal_text} ... {request.smiles_string}"
         full_proposal_text = model.generate_content(full_proposal_prompt, safety_settings=safety_settings).text
@@ -281,22 +287,17 @@ def generate_final_proposal(request: FinalProposalRequest):
         doc = Document()
         doc.add_heading('AI-Generated Research Proposal', 0)
         
-        # --- Add the molecular structure image to the DOCX ---
         try:
             if request.structure_image_base64:
-                # The frontend sends a data URL: "data:image/png;base64,iVBORw0KGgo..."
-                # We need to strip the header part.
                 img_data_url = request.structure_image_base64
                 header, encoded = img_data_url.split(",", 1)
                 image_data = base64.b64decode(encoded)
                 image_stream = io.BytesIO(image_data)
-                # Add picture and a caption
                 doc.add_paragraph().add_run().add_picture(image_stream, width=Inches(3.0))
                 doc.add_paragraph("Figure 1: Proposed Molecular Structure.", style='Caption')
         except Exception as e:
-            print(f"Could not add image to docx: {e}") # Log error but don't crash
+            print(f"Could not add image to docx: {e}")
         
-        # Add the rest of the proposal text
         for line in full_proposal_text.split('\n'):
             if line.startswith('### '): doc.add_heading(line.replace('### ', ''), level=3)
             elif line.startswith('## '): doc.add_heading(line.replace('## ', ''), level=2)
