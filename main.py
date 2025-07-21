@@ -1,7 +1,9 @@
 # main.py
+# NOTE: You will need to install the openai library: pip install openai
 import os
 import requests
 import google.generativeai as genai
+import openai  # <-- ADDED
 import xml.etree.ElementTree as ET
 from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
@@ -29,26 +31,24 @@ os.makedirs(KNOWLEDGE_BASE_DIR, exist_ok=True)
 
 
 # --- Pydantic Models for API data structures ---
-class RefineRequest(BaseModel):
+# Base model to handle common fields for different providers
+class BaseRequest(BaseModel):
+    api_key: str
+    model_name: str = Field(default=None)
+    api_provider: str = Field(default="google")
+
+class RefineRequest(BaseRequest):
     original_proposal: str
     user_feedback: str
-    api_key: str
-    model_name: str = Field("gemini-2.5-flash", alias="model_name")
 
-
-class StructureRequest(BaseModel):
+class StructureRequest(BaseRequest):
     proposal_text: str
-    api_key: str
-    model_name: str = Field("gemini-2.5-flash", alias="model_name")
 
-
-class FinalProposalRequest(BaseModel):
+class FinalProposalRequest(BaseRequest):
     summary_text: str
     proposal_text: str
     smiles_string: str
     structure_image_base64: str
-    api_key: str
-    model_name: str = Field("gemini-2.5-flash", alias="model_name")
 
 
 # --- FastAPI App Setup ---
@@ -63,7 +63,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- Safety Settings for AI model ---
+# --- Safety Settings for Google's AI model ---
 safety_settings = {
     HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
     HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
@@ -122,8 +122,6 @@ def search_local_knowledge():
             
     if not combined_text:
         return []
-        
-    # We return it in the same format as other search functions for consistency
     return [{'title': 'Local Knowledge Base', 'abstract': combined_text}]
 
 
@@ -182,135 +180,172 @@ async def upload_files(files: List[UploadFile] = File(...)):
 
 
 @app.get("/api/summarize")
-def get_summary(topic: str, source: str, api_key: str, model_name: str = "gemini-2.5-flash"):
+def get_summary(topic: str, source: str, api_key: str, api_provider: str, model_name: str = None):
     """Generates the initial literature summary and research proposal."""
-    try:
-        genai.configure(api_key=api_key)
-        # Use the provided model name, or default to flash
-        model = genai.GenerativeModel(model_name or 'gemini-2.5-flash')
-        
-        papers = []
-        if source == 'local':
-            papers = search_local_knowledge()
-        elif source == 'arxiv':
-            papers = search_arxiv(topic)
-        else: # Default to semantic
-            papers = search_semantic_scholar(topic)
+    # Fetch papers regardless of the provider
+    papers = []
+    if source == 'local':
+        papers = search_local_knowledge()
+    elif source == 'arxiv':
+        papers = search_arxiv(topic)
+    else: # Default to semantic
+        papers = search_semantic_scholar(topic)
 
-        if not papers: 
-            if source == 'local':
-                return {"topic": topic, "summary": "Your local knowledge base is empty. Please upload some documents first.", "proposal": ""}
-            return {"topic": topic, "summary": "Could not find any relevant papers from the selected source.", "proposal": ""}
-        
-        abstracts_text = "\n\n---\n\n".join(f"Title: {p['title']}\nAbstract: {p['abstract']}" for p in papers)
-        
+    if not papers: 
         if source == 'local':
-            summary_prompt = f"Summarize the key findings and themes from the following documents for a chemist. The user is interested in the topic: '{topic}'.\n\n{abstracts_text}"
-        else:
-            summary_prompt = f"Summarize these abstracts about '{topic}' for a chemist:\n{abstracts_text}"
+            return {"topic": topic, "summary": "Your local knowledge base is empty. Please upload some documents first.", "proposal": ""}
+        return {"topic": topic, "summary": "Could not find any relevant papers from the selected source.", "proposal": ""}
+    
+    abstracts_text = "\n\n---\n\n".join(f"Title: {p['title']}\nAbstract: {p['abstract']}" for p in papers)
+    
+    if source == 'local':
+        summary_prompt = f"Summarize the key findings and themes from the following documents for a chemist. The user is interested in the topic: '{topic}'.\n\n{abstracts_text}"
+    else:
+        summary_prompt = f"Summarize these abstracts about '{topic}' for a chemist:\n{abstracts_text}"
+
+    try:
+        summary_text = ""
+        proposal_text = ""
+        if api_provider == 'openai':
+            openai.api_key = api_key
+            openai_model = model_name or 'gpt-3.5-turbo'
             
-        summary_response = model.generate_content(summary_prompt, safety_settings=safety_settings)
+            summary_completion = openai.chat.completions.create(
+                model=openai_model,
+                messages=[{"role": "user", "content": summary_prompt}]
+            )
+            summary_text = summary_completion.choices[0].message.content
+            
+            proposal_prompt = f"Based on this summary, propose a novel research direction:\n{summary_text}"
+            proposal_completion = openai.chat.completions.create(
+                model=openai_model,
+                messages=[{"role": "user", "content": proposal_prompt}]
+            )
+            proposal_text = proposal_completion.choices[0].message.content
+
+        elif api_provider == 'google':
+            genai.configure(api_key=api_key)
+            google_model = model_name or 'gemini-1.5-flash'
+            model = genai.GenerativeModel(google_model)
+            
+            summary_response = model.generate_content(summary_prompt, safety_settings=safety_settings)
+            summary_text = summary_response.text
+            
+            proposal_prompt = f"Based on this summary, propose a novel research direction:\n{summary_text}"
+            proposal_response = model.generate_content(proposal_prompt, safety_settings=safety_settings)
+            proposal_text = proposal_response.text
+        else:
+            raise HTTPException(status_code=400, detail="Invalid API provider.")
+
+        return {"topic": topic, "summary": summary_text, "proposal": proposal_text}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"An error occurred with the AI provider: {e}")
+
+def get_ai_response(request: BaseRequest, prompt: str) -> str:
+    """Helper function to get a response from the selected AI provider."""
+    try:
+        if request.api_provider == 'openai':
+            openai.api_key = request.api_key
+            model = request.model_name or 'gpt-3.5-turbo'
+            completion = openai.chat.completions.create(
+                model=model,
+                messages=[{"role": "user", "content": prompt}]
+            )
+            return completion.choices[0].message.content
         
-        proposal_prompt = f"Based on this summary, propose a novel research direction:\n{summary_response.text}"
-        proposal_response = model.generate_content(proposal_prompt, safety_settings=safety_settings)
+        elif request.api_provider == 'google':
+            genai.configure(api_key=request.api_key)
+            model_name = request.model_name or 'gemini-1.5-flash'
+            model = genai.GenerativeModel(model_name)
+            response = model.generate_content(prompt, safety_settings=safety_settings)
+            return response.text
         
-        return {"topic": topic, "summary": summary_response.text, "proposal": proposal_response.text}
-    except Exception as e: raise HTTPException(status_code=500, detail=str(e))
+        else:
+            raise HTTPException(status_code=400, detail="Invalid API provider.")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"An error occurred with the AI provider: {e}")
+
 
 @app.post("/api/refine_proposal")
 def refine_proposal(request: RefineRequest):
     """Generates a new proposal based on user feedback."""
-    try:
-        genai.configure(api_key=request.api_key)
-        model = genai.GenerativeModel(request.model_name or 'gemini-2.5-flash')
-        
-        refine_prompt = f"A user disliked a proposal for this reason: '{request.user_feedback}'. Original proposal: '{request.original_proposal}'. Generate a new proposal."
-        response = model.generate_content(refine_prompt, safety_settings=safety_settings)
-        return {"new_proposal": response.text}
-    except Exception as e: raise HTTPException(status_code=500, detail=str(e))
+    refine_prompt = f"A user disliked a proposal for this reason: '{request.user_feedback}'. Original proposal: '{request.original_proposal}'. Generate a new proposal."
+    new_proposal = get_ai_response(request, refine_prompt)
+    return {"new_proposal": new_proposal}
+
 
 @app.post("/api/generate_structure")
 def generate_structure(request: StructureRequest):
     """Generates a chemical structure image from a text proposal."""
-    try:
-        genai.configure(api_key=request.api_key)
-        model = genai.GenerativeModel(request.model_name or 'gemini-2.5-flash')
-        
-        for attempt in range(3):
-            smiles_prompt = f"Based on this proposal, generate a plausible SMILES string. Respond with ONLY the SMILES string. Proposal:\n{request.proposal_text}"
-            response = model.generate_content(smiles_prompt, safety_settings=safety_settings)
-            smiles_string = response.text.strip().replace("`", "").replace("python", "")
-            mol = Chem.MolFromSmiles(smiles_string)
-            if mol is not None:
-                img = Draw.MolToImage(mol, size=(300, 300))
-                buffer = io.BytesIO()
-                img.save(buffer, format='PNG')
-                img_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
-                return {"image": img_base64, "smiles": smiles_string}
-        raise HTTPException(status_code=500, detail="AI failed to generate a valid chemical structure.")
-    except Exception as e: raise HTTPException(status_code=500, detail=str(e))
+    for _ in range(3): # Try 3 times
+        smiles_prompt = f"Based on this proposal, generate a plausible SMILES string. Respond with ONLY the SMILES string. Proposal:\n{request.proposal_text}"
+        smiles_string = get_ai_response(request, smiles_prompt).strip().replace("`", "").replace("python", "")
+        mol = Chem.MolFromSmiles(smiles_string)
+        if mol is not None:
+            img = Draw.MolToImage(mol, size=(300, 300))
+            buffer = io.BytesIO()
+            img.save(buffer, format='PNG')
+            img_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
+            return {"image": img_base64, "smiles": smiles_string}
+    raise HTTPException(status_code=500, detail="AI failed to generate a valid chemical structure after multiple attempts.")
+
 
 @app.post("/api/generate_proposal")
 def generate_final_proposal(request: FinalProposalRequest):
     """Generates the full suite of downloadable proposal documents."""
+    full_proposal_prompt = f"You are a PhD chemist writing a research proposal... CONTEXT: ... {request.summary_text} ... {request.proposal_text} ... {request.smiles_string}"
+    full_proposal_text = get_ai_response(request, full_proposal_prompt)
+    
+    recipe_prompt = f"Based on the proposal, create a synthesis recipe... PROPOSAL: {request.proposal_text} TARGET SMILES: {request.smiles_string}"
+    recipe_data_str = get_ai_response(request, recipe_prompt)
+    
+    # Create Excel files
+    wb_recipe = openpyxl.Workbook()
+    ws_recipe = wb_recipe.active
+    ws_recipe.title = "Synthesis Recipe"
+    ws_recipe.append(["Chemical Name", "Molar Mass (g/mol)", "Amount (mg or µL)", "Equivalents"])
+    for row in recipe_data_str.strip().split('\n'):
+        split_row = [item.strip() for item in row.split(',')]
+        if len(split_row) == 4: ws_recipe.append(split_row)
+    recipe_buffer = io.BytesIO()
+    wb_recipe.save(recipe_buffer)
+    recipe_base64 = base64.b64encode(recipe_buffer.getvalue()).decode('utf-8')
+    
+    wb_data = openpyxl.Workbook()
+    ws_data = wb_data.active
+    ws_data.title = "Experimental Data"
+    ws_data.append(["Experiment ID", "Date", "Reactant 1 (mg)", "Reactant 2 (mg)", "Solvent (mL)", "Reaction Time (h)", "Temperature (°C)", "Yield (%)", "Notes"])
+    data_buffer = io.BytesIO()
+    wb_data.save(data_buffer)
+    data_base64 = base64.b64encode(data_buffer.getvalue()).decode('utf-8')
+
+    # Create Word Document
+    doc = Document()
+    doc.add_heading('AI-Generated Research Proposal', 0)
+    
     try:
-        genai.configure(api_key=request.api_key)
-        model = genai.GenerativeModel(request.model_name or 'gemini-2.5-flash')
-        
-        full_proposal_prompt = f"You are a PhD chemist writing a research proposal... CONTEXT: ... {request.summary_text} ... {request.proposal_text} ... {request.smiles_string}"
-        full_proposal_text = model.generate_content(full_proposal_prompt, safety_settings=safety_settings).text
-        
-        recipe_prompt = f"Based on the proposal, create a synthesis recipe... PROPOSAL: {request.proposal_text} TARGET SMILES: {request.smiles_string}"
-        recipe_data_str = model.generate_content(recipe_prompt, safety_settings=safety_settings).text
-        
-        # Create Excel files
-        wb_recipe = openpyxl.Workbook()
-        ws_recipe = wb_recipe.active
-        ws_recipe.title = "Synthesis Recipe"
-        ws_recipe.append(["Chemical Name", "Molar Mass (g/mol)", "Amount (mg or µL)", "Equivalents"])
-        for row in recipe_data_str.strip().split('\n'):
-            split_row = [item.strip() for item in row.split(',')]
-            if len(split_row) == 4: ws_recipe.append(split_row)
-        recipe_buffer = io.BytesIO()
-        wb_recipe.save(recipe_buffer)
-        recipe_base64 = base64.b64encode(recipe_buffer.getvalue()).decode('utf-8')
-        
-        wb_data = openpyxl.Workbook()
-        ws_data = wb_data.active
-        ws_data.title = "Experimental Data"
-        ws_data.append(["Experiment ID", "Date", "Reactant 1 (mg)", "Reactant 2 (mg)", "Solvent (mL)", "Reaction Time (h)", "Temperature (°C)", "Yield (%)", "Notes"])
-        data_buffer = io.BytesIO()
-        wb_data.save(data_buffer)
-        data_base64 = base64.b64encode(data_buffer.getvalue()).decode('utf-8')
-
-        # Create Word Document
-        doc = Document()
-        doc.add_heading('AI-Generated Research Proposal', 0)
-        
-        try:
-            if request.structure_image_base64:
-                img_data_url = request.structure_image_base64
-                header, encoded = img_data_url.split(",", 1)
-                image_data = base64.b64decode(encoded)
-                image_stream = io.BytesIO(image_data)
-                doc.add_paragraph().add_run().add_picture(image_stream, width=Inches(3.0))
-                doc.add_paragraph("Figure 1: Proposed Molecular Structure.", style='Caption')
-        except Exception as e:
-            print(f"Could not add image to docx: {e}")
-        
-        for line in full_proposal_text.split('\n'):
-            if line.startswith('### '): doc.add_heading(line.replace('### ', ''), level=3)
-            elif line.startswith('## '): doc.add_heading(line.replace('## ', ''), level=2)
-            elif line.strip(): doc.add_paragraph(line)
-        doc_buffer = io.BytesIO()
-        doc.save(doc_buffer)
-        doc_base64 = base64.b64encode(doc_buffer.getvalue()).decode('utf-8')
-
-        return JSONResponse(content={
-            "full_proposal_text": full_proposal_text,
-            "recipe_file": recipe_base64,
-            "data_template_file": data_base64,
-            "proposal_docx_file": doc_base64
-        })
+        if request.structure_image_base64:
+            img_data_url = request.structure_image_base64
+            header, encoded = img_data_url.split(",", 1)
+            image_data = base64.b64decode(encoded)
+            image_stream = io.BytesIO(image_data)
+            doc.add_paragraph().add_run().add_picture(image_stream, width=Inches(3.0))
+            doc.add_paragraph("Figure 1: Proposed Molecular Structure.", style='Caption')
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        print(f"Could not add image to docx: {e}")
+    
+    for line in full_proposal_text.split('\n'):
+        if line.startswith('### '): doc.add_heading(line.replace('### ', ''), level=3)
+        elif line.startswith('## '): doc.add_heading(line.replace('## ', ''), level=2)
+        elif line.strip(): doc.add_paragraph(line)
+    doc_buffer = io.BytesIO()
+    doc.save(doc_buffer)
+    doc_base64 = base64.b64encode(doc_buffer.getvalue()).decode('utf-8')
+
+    return JSONResponse(content={
+        "full_proposal_text": full_proposal_text,
+        "recipe_file": recipe_base64,
+        "data_template_file": data_base64,
+        "proposal_docx_file": doc_base64
+    })

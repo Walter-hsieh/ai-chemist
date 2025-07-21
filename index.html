@@ -37,8 +37,12 @@
     <p>Enter your API key and a research field to generate a complete research proposal. You can use online databases or upload your own documents.</p>
 
     <div class="input-group">
-        <input type="password" id="gemini-api-key" class="api-key-input" placeholder="Enter your Gemini API Key here">
-        <input type="text" id="model-name-input" class="model-input" placeholder="Optional: Enter Model Name (e.g., gemini-1.5-pro)">
+        <select id="api-provider-select">
+            <option value="google">Google Gemini</option>
+            <option value="openai">OpenAI</option>
+        </select>
+        <input type="password" id="api-key-input" class="api-key-input" placeholder="Enter your Gemini API Key here">
+        <input type="text" id="model-name-input" class="model-input" placeholder="Optional: gemini-1.5-pro or gpt-4-turbo">
         <select id="source-select">
             <option value="semantic">Use Semantic Scholar</option>
             <option value="arxiv">Use arXiv</option>
@@ -106,8 +110,9 @@
             finalProposalSection: document.getElementById('final-proposal-section'),
             downloadLinks: document.getElementById('download-links'),
             fullProposalText: document.getElementById('full-proposal-text'),
-            apiKeyInput: document.getElementById('gemini-api-key'),
+            apiKeyInput: document.getElementById('api-key-input'),
             modelNameInput: document.getElementById('model-name-input'),
+            providerSelect: document.getElementById('api-provider-select'),
             localKnowledgeSection: document.getElementById('local-knowledge-section'),
             fileUpload: document.getElementById('file-upload'),
             uploadButton: document.getElementById('upload-button')
@@ -117,18 +122,30 @@
         function getApiKey() {
             const apiKey = allElements.apiKeyInput.value.trim();
             if (!apiKey) {
-                alert('Please enter your Gemini API Key before proceeding.');
+                alert(`Please enter your ${allElements.providerSelect.value === 'google' ? 'Gemini' : 'OpenAI'} API Key before proceeding.`);
                 return null;
             }
             return apiKey;
         }
 
         function getModelName() {
-            // Return the user's model name or an empty string to let the backend use the default
             return allElements.modelNameInput.value.trim();
         }
 
-        // --- UI Logic for showing/hiding upload section ---
+        function getApiProvider() {
+            return allElements.providerSelect.value;
+        }
+
+        // --- UI Logic ---
+        allElements.providerSelect.addEventListener('change', () => {
+            const provider = getApiProvider();
+            if (provider === 'openai') {
+                allElements.apiKeyInput.placeholder = 'Enter your OpenAI API Key here';
+            } else {
+                allElements.apiKeyInput.placeholder = 'Enter your Gemini API Key here';
+            }
+        });
+
         allElements.sourceSelect.addEventListener('change', () => {
             if (allElements.sourceSelect.value === 'local') {
                 allElements.localKnowledgeSection.classList.remove('hidden');
@@ -140,30 +157,20 @@
         // --- File Upload Logic ---
         allElements.uploadButton.addEventListener('click', async () => {
             const files = allElements.fileUpload.files;
-            if (files.length === 0) {
-                return alert('Please select files to upload.');
-            }
-
+            if (files.length === 0) { return alert('Please select files to upload.'); }
             const formData = new FormData();
-            for (const file of files) {
-                formData.append('files', file);
-            }
-
+            for (const file of files) { formData.append('files', file); }
             allElements.uploadButton.disabled = true;
             allElements.uploadButton.innerText = 'Uploading...';
-
             try {
-                const response = await fetch('http://127.0.0.1:8000/api/upload', {
-                    method: 'POST',
-                    body: formData
-                });
+                const response = await fetch('http://127.0.0.1:8000/api/upload', { method: 'POST', body: formData });
                 if (!response.ok) {
                     const errorData = await response.json();
                     throw new Error(errorData.detail || 'File upload failed.');
                 }
                 const result = await response.json();
                 alert(result.message);
-                allElements.fileUpload.value = ''; // Clear the file input
+                allElements.fileUpload.value = '';
             } catch (error) {
                 alert(`Upload error: ${error.message}`);
             } finally {
@@ -180,6 +187,7 @@
             const topic = allElements.topicInput.value.trim();
             const source = allElements.sourceSelect.value;
             const modelName = getModelName();
+            const apiProvider = getApiProvider();
             if (!topic) { return alert('Please enter a topic to guide the research.'); }
             
             allElements.searchButton.disabled = true;
@@ -191,7 +199,7 @@
             allElements.summaryDiv.innerText = 'Analyzing literature...';
             
             try {
-                const url = `http://127.0.0.1:8000/api/summarize?topic=${encodeURIComponent(topic)}&source=${source}&api_key=${apiKey}&model_name=${encodeURIComponent(modelName)}`;
+                const url = `http://127.0.0.1:8000/api/summarize?topic=${encodeURIComponent(topic)}&source=${source}&api_key=${apiKey}&api_provider=${apiProvider}&model_name=${encodeURIComponent(modelName)}`;
                 const response = await fetch(url);
                 if (!response.ok) {
                     const errorData = await response.json();
@@ -215,10 +223,22 @@
             }
         }
         
+        // --- Function to build request body for POST requests ---
+        function buildRequestBody(additionalData = {}) {
+            const apiKey = getApiKey();
+            if (!apiKey) return null;
+            return JSON.stringify({
+                api_key: apiKey,
+                api_provider: getApiProvider(),
+                model_name: getModelName(),
+                ...additionalData
+            });
+        }
+
         // --- Event Listener for First Approval -> Generate Structure ---
         allElements.approveBtn.addEventListener('click', async () => {
-            const apiKey = getApiKey();
-            if (!apiKey) return;
+            const body = buildRequestBody({ proposal_text: currentProposal });
+            if (!body) return;
 
             document.getElementById('feedback-buttons').classList.add('hidden');
             allElements.structureSection.classList.remove('hidden');
@@ -227,11 +247,7 @@
                 const response = await fetch('http://127.0.0.1:8000/api/generate_structure', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ 
-                        proposal_text: currentProposal, 
-                        api_key: apiKey,
-                        model_name: getModelName()
-                    })
+                    body: body
                 });
                 if (!response.ok) {
                     const errorData = await response.json();
@@ -251,8 +267,13 @@
         
         // --- Final Approve Button -> Generate All Documents ---
         allElements.finalApproveBtn.addEventListener('click', async () => {
-            const apiKey = getApiKey();
-            if (!apiKey) return;
+            const body = buildRequestBody({
+                summary_text: currentSummary,
+                proposal_text: currentProposal,
+                smiles_string: currentSmiles,
+                structure_image_base64: currentStructureImage,
+            });
+            if (!body) return;
 
             document.getElementById('structure-feedback-buttons').classList.add('hidden');
             allElements.finalProposalSection.classList.remove('hidden');
@@ -262,14 +283,7 @@
                 const response = await fetch('http://127.0.0.1:8000/api/generate_proposal', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({
-                        summary_text: currentSummary,
-                        proposal_text: currentProposal,
-                        smiles_string: currentSmiles,
-                        structure_image_base64: currentStructureImage,
-                        api_key: apiKey,
-                        model_name: getModelName()
-                    })
+                    body: body
                 });
                 if (!response.ok) {
                     const errorData = await response.json();
@@ -277,9 +291,7 @@
                 }
 
                 const data = await response.json();
-
                 allElements.fullProposalText.innerText = data.full_proposal_text;
-
                 const recipeUrl = `data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,${data.recipe_file}`;
                 const dataUrl = `data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,${data.data_template_file}`;
                 const docxUrl = `data:application/vnd.openxmlformats-officedocument.wordprocessingml.document;base64,${data.proposal_docx_file}`;
@@ -298,25 +310,23 @@
 
         // --- Disapprove and Redesign Listeners ---
         allElements.disapproveBtn.addEventListener('click', async () => {
-            const apiKey = getApiKey();
-            if (!apiKey) return;
-
             const reason = prompt("What's the reason for your disapproval? Please be specific.");
             if (!reason || reason.trim() === '') return;
 
-            const originalProposal = allElements.proposalText.innerText;
+            const body = buildRequestBody({
+                original_proposal: currentProposal,
+                user_feedback: reason,
+            });
+            if (!body) return;
+
+            const originalProposalText = allElements.proposalText.innerText;
             allElements.proposalText.innerText = 'Generating a new proposal based on your feedback...';
 
             try {
                 const response = await fetch('http://127.0.0.1:8000/api/refine_proposal', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({
-                        original_proposal: originalProposal,
-                        user_feedback: reason,
-                        api_key: apiKey,
-                        model_name: getModelName()
-                    })
+                    body: body
                 });
 
                 if (!response.ok) {
@@ -328,7 +338,7 @@
                 allElements.proposalText.innerText = data.new_proposal;
             } catch (error) {
                 console.error('Refinement error:', error);
-                allElements.proposalText.innerText = originalProposal;
+                allElements.proposalText.innerText = originalProposalText;
                 alert(`Sorry, an error occurred during refinement: ${error.message}`);
             }
         });
