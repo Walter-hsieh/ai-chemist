@@ -6,38 +6,56 @@
     <title>AI Chemist - Final</title>
     <style>
         body { font-family: sans-serif; line-height: 1.6; padding: 20px; max-width: 800px; margin: auto; }
-        .input-group { display: flex; flex-direction: column; gap: 10px; margin-bottom: 10px; }
-        input, select { width: 100%; padding: 10px; font-size: 16px; box-sizing: border-box; }
-        button { width: 100%; padding: 10px; background-color: #007bff; color: white; border: none; font-size: 16px; cursor: pointer; }
-        button:disabled { background-color: #ccc; }
+        .input-group { display: flex; flex-direction: column; gap: 10px; margin-bottom: 20px; }
+        input, select, button { width: 100%; padding: 10px; font-size: 16px; box-sizing: border-box; border-radius: 5px; border: 1px solid #ccc;}
+        .api-key-input { border-left: 3px solid #f0ad4e; }
+        button { background-color: #007bff; color: white; border: none; cursor: pointer; transition: background-color 0.2s; }
+        button:hover { background-color: #0056b3; }
+        button:disabled { background-color: #ccc; cursor: not-allowed; }
         .hidden { display: none; }
-        #summary, #proposal-section, #structure-section, #final-proposal-section { margin-top: 20px; padding: 15px; border: 1px solid #ddd; background-color: #f9f9f9; white-space: pre-wrap; }
+        .results-section { margin-top: 20px; padding: 15px; border: 1px solid #ddd; background-color: #f9f9f9; white-space: pre-wrap; border-radius: 5px; }
         #proposal-section { border-left: 5px solid #007bff; }
         #structure-section { border-left: 5px solid #28a745; text-align: center; }
         #final-proposal-section { border-left: 5px solid #ffc107; }
+        #local-knowledge-section { border-left: 5px solid #6f42c1; padding: 15px; background-color: #f8f9fa; border-radius: 5px; margin-bottom: 20px; }
         #feedback-buttons, #structure-feedback-buttons { display: flex; gap: 10px; margin-top: 20px; }
         #feedback-buttons button, #structure-feedback-buttons button { width: 50%; }
         .approve-btn { background-color: #28a745; }
+        .approve-btn:hover { background-color: #218838; }
         .disapprove-btn { background-color: #dc3545; }
-        #molecule-img { max-width: 100%; height: auto; margin-top: 15px; }
-        .download-link { display: block; margin-top: 10px; font-size: 1.1em; }
+        .disapprove-btn:hover { background-color: #c82333; }
+        #molecule-img { max-width: 100%; height: auto; margin-top: 15px; border: 1px solid #ddd; border-radius: 5px; }
+        .download-link { display: block; margin-top: 10px; font-size: 1.1em; text-decoration: none; padding: 8px; background-color: #17a2b8; color: white; border-radius: 5px; text-align: center;}
+        .download-link:hover { background-color: #138496; }
+        #upload-button { background-color: #6f42c1; }
+        #upload-button:hover { background-color: #5a32a3; }
     </style>
 </head>
 <body>
-    <h1>AI Chemist 🧪</h1>
-    <p>Enter a research field to generate a complete research proposal.</p>
+    <h1>AI Chemist 👨‍🔬</h1>
+    <p>Enter your API key and a research field to generate a complete research proposal. You can use online databases or upload your own documents.</p>
 
     <div class="input-group">
+        <input type="password" id="gemini-api-key" class="api-key-input" placeholder="Enter your Gemini API Key here">
         <select id="source-select">
             <option value="semantic">Use Semantic Scholar</option>
             <option value="arxiv">Use arXiv</option>
+            <option value="local">Use Local Knowledge</option>
         </select>
-        <input type="text" id="topic-input" placeholder="e.g., carbon capture or quantum computing">
+        <input type="text" id="topic-input" placeholder="e.g., MOFs for carbon capture">
     </div>
-    <button id="search-button" onclick="fetchSummary()">Search</button>
+    
+    <div id="local-knowledge-section" class="hidden">
+        <h3>Local Knowledge Base</h3>
+        <p>Upload your own documents (PDF, DOCX, TXT) for analysis. The AI will summarize these based on your topic.</p>
+        <input type="file" id="file-upload" multiple accept=".pdf,.docx,.txt">
+        <button id="upload-button">Upload Files</button>
+    </div>
 
-    <div id="summary" class="hidden"></div>
-    <div id="proposal-section" class="hidden">
+    <button id="search-button" onclick="fetchSummary()">Search & Generate</button>
+
+    <div id="summary" class="results-section hidden"></div>
+    <div id="proposal-section" class="results-section hidden">
         <h2>Proposed Research Direction</h2>
         <div id="proposal-text"></div>
         <div id="feedback-buttons">
@@ -45,16 +63,16 @@
             <button id="disapprove-btn" class="disapprove-btn">👎 Disapprove Proposal</button>
         </div>
     </div>
-    <div id="structure-section" class="hidden">
+    <div id="structure-section" class="results-section hidden">
         <h2>Proposed Molecular Structure</h2>
         <div id="structure-image-container"></div>
         <div id="structure-feedback-buttons">
             <button id="final-approve-btn" class="approve-btn">✅ Final Approve & Generate Docs</button>
-            <button id="redesign-btn" class="disapprove-btn">❌ Redesign Molecule</button>
+            <button id="redesign-btn" class="disapprove-btn">🔄 Redesign Molecule</button>
         </div>
     </div>
     
-    <div id="final-proposal-section" class="hidden">
+    <div id="final-proposal-section" class="results-section hidden">
         <h2>Project Proposal & Downloads</h2>
         <div id="download-links"></div>
         <hr>
@@ -68,87 +86,162 @@
         let currentProposal = "";
         let currentSmiles = "";
 
-        // --- Getting all elements ---
-        const topicInput = document.getElementById('topic-input');
-        const searchButton = document.getElementById('search-button');
-        const summaryDiv = document.getElementById('summary');
-        const proposalSection = document.getElementById('proposal-section');
-        const proposalText = document.getElementById('proposal-text');
-        const approveBtn = document.getElementById('approve-btn');
-        const disapproveBtn = document.getElementById('disapprove-btn');
-        const sourceSelect = document.getElementById('source-select');
-        const structureSection = document.getElementById('structure-section');
-        const structureImageContainer = document.getElementById('structure-image-container');
-        const finalApproveBtn = document.getElementById('final-approve-btn');
-        const redesignBtn = document.getElementById('redesign-btn');
-        const finalProposalSection = document.getElementById('final-proposal-section');
-        const downloadLinks = document.getElementById('download-links');
-        const fullProposalText = document.getElementById('full-proposal-text');
+        // --- Getting all element references ---
+        const allElements = {
+            topicInput: document.getElementById('topic-input'),
+            searchButton: document.getElementById('search-button'),
+            summaryDiv: document.getElementById('summary'),
+            proposalSection: document.getElementById('proposal-section'),
+            proposalText: document.getElementById('proposal-text'),
+            approveBtn: document.getElementById('approve-btn'),
+            disapproveBtn: document.getElementById('disapprove-btn'),
+            sourceSelect: document.getElementById('source-select'),
+            structureSection: document.getElementById('structure-section'),
+            structureImageContainer: document.getElementById('structure-image-container'),
+            finalApproveBtn: document.getElementById('final-approve-btn'),
+            redesignBtn: document.getElementById('redesign-btn'),
+            finalProposalSection: document.getElementById('final-proposal-section'),
+            downloadLinks: document.getElementById('download-links'),
+            fullProposalText: document.getElementById('full-proposal-text'),
+            apiKeyInput: document.getElementById('gemini-api-key'),
+            localKnowledgeSection: document.getElementById('local-knowledge-section'),
+            fileUpload: document.getElementById('file-upload'),
+            uploadButton: document.getElementById('upload-button')
+        };
+
+        // --- Helper function to get API Key ---
+        function getApiKey() {
+            const apiKey = allElements.apiKeyInput.value.trim();
+            if (!apiKey) {
+                alert('Please enter your Gemini API Key before proceeding.');
+                return null;
+            }
+            return apiKey;
+        }
+
+        // --- UI Logic for showing/hiding upload section ---
+        allElements.sourceSelect.addEventListener('change', () => {
+            if (allElements.sourceSelect.value === 'local') {
+                allElements.localKnowledgeSection.classList.remove('hidden');
+            } else {
+                allElements.localKnowledgeSection.classList.add('hidden');
+            }
+        });
+
+        // --- File Upload Logic ---
+        allElements.uploadButton.addEventListener('click', async () => {
+            const files = allElements.fileUpload.files;
+            if (files.length === 0) {
+                return alert('Please select files to upload.');
+            }
+
+            const formData = new FormData();
+            for (const file of files) {
+                formData.append('files', file);
+            }
+
+            allElements.uploadButton.disabled = true;
+            allElements.uploadButton.innerText = 'Uploading...';
+
+            try {
+                const response = await fetch('http://127.0.0.1:8000/api/upload', {
+                    method: 'POST',
+                    body: formData
+                });
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.detail || 'File upload failed.');
+                }
+                const result = await response.json();
+                alert(result.message);
+                allElements.fileUpload.value = ''; // Clear the file input
+            } catch (error) {
+                alert(`Upload error: ${error.message}`);
+            } finally {
+                allElements.uploadButton.disabled = false;
+                allElements.uploadButton.innerText = 'Upload Files';
+            }
+        });
 
         // --- Main Search Function ---
         async function fetchSummary() {
-            const topic = topicInput.value.trim();
-            const source = sourceSelect.value; 
-            if (!topic) { return alert('Please enter a topic.'); }
+            const apiKey = getApiKey();
+            if (!apiKey) return;
+
+            const topic = allElements.topicInput.value.trim();
+            const source = allElements.sourceSelect.value; 
+            if (!topic) { return alert('Please enter a topic to guide the research.'); }
             
             // Reset UI
-            searchButton.disabled = true;
-            searchButton.innerText = 'Searching...';
-            [summaryDiv, proposalSection, structureSection, finalProposalSection].forEach(el => el.classList.add('hidden'));
+            allElements.searchButton.disabled = true;
+            allElements.searchButton.innerText = 'Searching...';
+            [allElements.summaryDiv, allElements.proposalSection, allElements.structureSection, allElements.finalProposalSection].forEach(el => el.classList.add('hidden'));
             document.getElementById('feedback-buttons').classList.remove('hidden');
             document.getElementById('structure-feedback-buttons').classList.remove('hidden');
-            summaryDiv.classList.remove('hidden');
-            summaryDiv.innerText = 'Finding papers...';
+            allElements.summaryDiv.classList.remove('hidden');
+            allElements.summaryDiv.innerText = 'Analyzing literature...';
             
             try {
-                const url = `http://127.0.0.1:8000/api/summarize?topic=${encodeURIComponent(topic)}&source=${source}`;
+                const url = `http://127.0.0.1:8000/api/summarize?topic=${encodeURIComponent(topic)}&source=${source}&api_key=${apiKey}`;
                 const response = await fetch(url);
-                if (!response.ok) throw new Error('Failed to get summary.');
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.detail || 'Failed to get summary.');
+                }
                 const data = await response.json();
                 
                 currentSummary = data.summary;
                 currentProposal = data.proposal;
                 
-                summaryDiv.innerText = currentSummary;
-                proposalText.innerText = currentProposal;
+                allElements.summaryDiv.innerText = currentSummary;
+                allElements.proposalText.innerText = currentProposal;
                 
-                if (data.proposal) proposalSection.classList.remove('hidden');
+                if (data.proposal) allElements.proposalSection.classList.remove('hidden');
 
             } catch (error) {
-                summaryDiv.innerText = 'An error occurred. Please check the console.';
+                allElements.summaryDiv.innerText = `An error occurred: ${error.message}`;
             } finally {
-                searchButton.disabled = false;
-                searchButton.innerText = 'Search';
+                allElements.searchButton.disabled = false;
+                allElements.searchButton.innerText = 'Search & Generate';
             }
         }
         
         // --- Event Listener for First Approval -> Generate Structure ---
-        approveBtn.addEventListener('click', async () => {
+        allElements.approveBtn.addEventListener('click', async () => {
+            const apiKey = getApiKey();
+            if (!apiKey) return;
+
             document.getElementById('feedback-buttons').classList.add('hidden');
-            structureSection.classList.remove('hidden');
-            structureImageContainer.innerText = 'AI is designing the molecule...';
+            allElements.structureSection.classList.remove('hidden');
+            allElements.structureImageContainer.innerText = 'AI is designing the molecule...';
             try {
                 const response = await fetch('http://127.0.0.1:8000/api/generate_structure', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ proposal_text: currentProposal })
+                    body: JSON.stringify({ proposal_text: currentProposal, api_key: apiKey })
                 });
-                if (!response.ok) throw new Error('Failed to generate structure.');
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.detail || 'Failed to generate structure.');
+                }
                 
                 const data = await response.json();
                 currentSmiles = data.smiles;
                 
-                structureImageContainer.innerHTML = `<img id="molecule-img" src="data:image/png;base64,${data.image}" alt="Generated Molecule" />`;
+                allElements.structureImageContainer.innerHTML = `<img id="molecule-img" src="data:image/png;base64,${data.image}" alt="Generated Molecule" />`;
             } catch (error) {
-                structureImageContainer.innerText = 'An error occurred during structure generation.';
+                allElements.structureImageContainer.innerText = `An error occurred: ${error.message}`;
             }
         });
         
         // --- Final Approve Button -> Generate All Documents ---
-        finalApproveBtn.addEventListener('click', async () => {
+        allElements.finalApproveBtn.addEventListener('click', async () => {
+            const apiKey = getApiKey();
+            if (!apiKey) return;
+
             document.getElementById('structure-feedback-buttons').classList.add('hidden');
-            finalProposalSection.classList.remove('hidden');
-            downloadLinks.innerText = "Generating all project documents, please wait...";
+            allElements.finalProposalSection.classList.remove('hidden');
+            allElements.downloadLinks.innerText = "Generating all project documents, please wait...";
 
             try {
                 const response = await fetch('http://127.0.0.1:8000/api/generate_proposal', {
@@ -157,20 +250,24 @@
                     body: JSON.stringify({
                         summary_text: currentSummary,
                         proposal_text: currentProposal,
-                        smiles_string: currentSmiles
+                        smiles_string: currentSmiles,
+                        api_key: apiKey
                     })
                 });
-                if (!response.ok) throw new Error('Failed to generate final proposal.');
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.detail || 'Failed to generate final proposal.');
+                }
 
                 const data = await response.json();
 
-                fullProposalText.innerText = data.full_proposal_text;
+                allElements.fullProposalText.innerText = data.full_proposal_text;
 
                 const recipeUrl = `data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,${data.recipe_file}`;
                 const dataUrl = `data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,${data.data_template_file}`;
                 const docxUrl = `data:application/vnd.openxmlformats-officedocument.wordprocessingml.document;base64,${data.proposal_docx_file}`;
                 
-                downloadLinks.innerHTML = `
+                allElements.downloadLinks.innerHTML = `
                     <a href="${docxUrl}" class="download-link" download="Research_Proposal.docx">Download Proposal (.docx)</a>
                     <a href="${recipeUrl}" class="download-link" download="Synthesis_Recipe.xlsx">Download Synthesis Recipe (.xlsx)</a>
                     <a href="${dataUrl}" class="download-link" download="Data_Recording_Template.xlsx">Download Data Template (.xlsx)</a>
@@ -178,17 +275,20 @@
 
             } catch (error) {
                 console.error("Final proposal error:", error);
-                downloadLinks.innerText = "An error occurred generating the final documents.";
+                allElements.downloadLinks.innerText = `An error occurred: ${error.message}`;
             }
         });
 
         // --- Disapprove and Redesign Listeners ---
-        disapproveBtn.addEventListener('click', async () => {
+        allElements.disapproveBtn.addEventListener('click', async () => {
+            const apiKey = getApiKey();
+            if (!apiKey) return;
+
             const reason = prompt("What's the reason for your disapproval? Please be specific.");
             if (!reason || reason.trim() === '') return;
 
-            const originalProposal = proposalText.innerText;
-            proposalText.innerText = 'Generating a new proposal based on your feedback...';
+            const originalProposal = allElements.proposalText.innerText;
+            allElements.proposalText.innerText = 'Generating a new proposal based on your feedback...';
 
             try {
                 const response = await fetch('http://127.0.0.1:8000/api/refine_proposal', {
@@ -196,28 +296,29 @@
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({
                         original_proposal: originalProposal,
-                        user_feedback: reason
+                        user_feedback: reason,
+                        api_key: apiKey
                     })
                 });
 
                 if (!response.ok) {
                     const errorData = await response.json();
-                    throw new Error(`HTTP error! status: ${response.status} - ${errorData.detail}`);
+                    throw new Error(errorData.detail || 'Failed to refine proposal.');
                 }
                 const data = await response.json();
                 currentProposal = data.new_proposal;
-                proposalText.innerText = data.new_proposal;
+                allElements.proposalText.innerText = data.new_proposal;
             } catch (error) {
                 console.error('Refinement error:', error);
-                proposalText.innerText = originalProposal;
-                alert('Sorry, an error occurred during refinement.');
+                allElements.proposalText.innerText = originalProposal;
+                alert(`Sorry, an error occurred during refinement: ${error.message}`);
             }
         });
         
-        redesignBtn.addEventListener('click', () => {
+        allElements.redesignBtn.addEventListener('click', () => {
              alert("To redesign the molecule, please click 'Disapprove Proposal' again with new feedback about the desired chemical properties. A new structure will be generated when you approve the resulting text proposal.");
              document.getElementById('feedback-buttons').classList.remove('hidden');
-             structureSection.classList.add('hidden');
+             allElements.structureSection.classList.add('hidden');
         });
     </script>
 </body>

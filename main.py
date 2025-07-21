@@ -3,33 +3,45 @@ import os
 import requests
 import google.generativeai as genai
 import xml.etree.ElementTree as ET
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, JSONResponse
 from dotenv import load_dotenv
 from pydantic import BaseModel
 from rdkit import Chem
 from rdkit.Chem import Draw
 import io
 import base64
-from fastapi.responses import JSONResponse
 import openpyxl
 from docx import Document
+from google.generativeai.types import HarmCategory, HarmBlockThreshold
+import shutil
+from typing import List
+import pypdf
 
-# Load environment variables from the .env file
+# Load environment variables from a .env file for local development
 load_dotenv()
+
+# --- Create a directory for local knowledge base ---
+KNOWLEDGE_BASE_DIR = "knowledge_base"
+os.makedirs(KNOWLEDGE_BASE_DIR, exist_ok=True)
+
 
 # --- Pydantic Models for API data structures ---
 class RefineRequest(BaseModel):
     original_proposal: str
     user_feedback: str
+    api_key: str
 
 class StructureRequest(BaseModel):
     proposal_text: str
+    api_key: str
 
 class FinalProposalRequest(BaseModel):
     summary_text: str
     proposal_text: str
     smiles_string: str
+    api_key: str
 
 # --- FastAPI App Setup ---
 app = FastAPI()
@@ -43,16 +55,70 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- AI Configuration ---
-try:
-    # Use the recommended 'gemini-1.5-pro-latest' for the best quality
-    genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
-    model = genai.GenerativeModel('gemini-1.5-pro-latest')
-except Exception as e:
-    print(f"Error configuring Gemini API: {e}")
-    model = None
+# --- Safety Settings for AI model ---
+safety_settings = {
+    HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
+    HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
+    HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
+    HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
+}
+
+# --- Helper Functions for Data Reading ---
+def read_pdf(file_path: str) -> str:
+    """Reads text from a PDF file."""
+    try:
+        reader = pypdf.PdfReader(file_path)
+        text = ""
+        for page in reader.pages:
+            text += page.extract_text() or ""
+        return text
+    except Exception as e:
+        print(f"Error reading PDF {file_path}: {e}")
+        return ""
+
+def read_docx(file_path: str) -> str:
+    """Reads text from a DOCX file."""
+    try:
+        doc = Document(file_path)
+        return "\n".join([para.text for para in doc.paragraphs])
+    except Exception as e:
+        print(f"Error reading DOCX {file_path}: {e}")
+        return ""
+
+def read_txt(file_path: str) -> str:
+    """Reads text from a TXT file."""
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            return f.read()
+    except Exception as e:
+        print(f"Error reading TXT {file_path}: {e}")
+        return ""
 
 # --- Helper Functions for Data Retrieval ---
+def search_local_knowledge():
+    """Reads all documents from the local knowledge base."""
+    combined_text = ""
+    for filename in os.listdir(KNOWLEDGE_BASE_DIR):
+        file_path = os.path.join(KNOWLEDGE_BASE_DIR, filename)
+        if filename.endswith(".pdf"):
+            content = read_pdf(file_path)
+        elif filename.endswith(".docx"):
+            content = read_docx(file_path)
+        elif filename.endswith(".txt"):
+            content = read_txt(file_path)
+        else:
+            continue
+        
+        if content:
+            combined_text += f"--- Document: {filename} ---\n{content}\n\n"
+            
+    if not combined_text:
+        return []
+        
+    # We return it in the same format as other search functions for consistency
+    return [{'title': 'Local Knowledge Base', 'abstract': combined_text}]
+
+
 def search_semantic_scholar(topic: str, limit: int = 5):
     """Searches Semantic Scholar for papers on a given topic."""
     api_key = os.environ.get("SEMANTIC_SCHOLAR_API_KEY")
@@ -89,114 +155,114 @@ def search_arxiv(topic: str, limit: int = 5):
 # --- API Endpoints ---
 @app.get("/")
 def read_root():
-    return {"message": "AI Chemist API is running."}
+    """Serves the main index.html file for the frontend."""
+    return FileResponse('index.html')
+
+@app.post("/api/upload")
+async def upload_files(files: List[UploadFile] = File(...)):
+    """Handles file uploads and saves them to the knowledge base."""
+    for file in files:
+        file_path = os.path.join(KNOWLEDGE_BASE_DIR, file.filename)
+        try:
+            with open(file_path, "wb") as buffer:
+                shutil.copyfileobj(file.file, buffer)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Could not save file: {file.filename}. Error: {e}")
+        finally:
+            file.file.close()
+    return JSONResponse(content={"message": f"Successfully uploaded {len(files)} files."})
+
 
 @app.get("/api/summarize")
-def get_summary(topic: str, source: str = 'semantic'):
-    if not model: raise HTTPException(status_code=500, detail="Gemini API is not configured.")
+def get_summary(topic: str, source: str, api_key: str):
+    """Generates the initial literature summary and research proposal."""
     try:
-        papers = search_arxiv(topic) if source == 'arxiv' else search_semantic_scholar(topic)
-        if not papers: return {"topic": topic, "summary": "Could not find any relevant papers on this topic.", "proposal": ""}
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        
+        papers = []
+        if source == 'local':
+            papers = search_local_knowledge()
+        elif source == 'arxiv':
+            papers = search_arxiv(topic)
+        else: # Default to semantic
+            papers = search_semantic_scholar(topic)
+
+        if not papers: 
+            if source == 'local':
+                return {"topic": topic, "summary": "Your local knowledge base is empty. Please upload some documents first.", "proposal": ""}
+            return {"topic": topic, "summary": "Could not find any relevant papers from the selected source.", "proposal": ""}
+        
         abstracts_text = "\n\n---\n\n".join(f"Title: {p['title']}\nAbstract: {p['abstract']}" for p in papers)
-        summary_prompt = f"Summarize these abstracts for a chemist:\n{abstracts_text}"
-        summary_response = model.generate_content(summary_prompt)
-        summary_text = summary_response.text
-        proposal_prompt = f"Based on this summary, propose a novel research direction:\n{summary_text}"
-        proposal_response = model.generate_content(proposal_prompt)
-        proposal_text = proposal_response.text
-        return {"topic": topic, "summary": summary_text, "proposal": proposal_text}
+        
+        # For local knowledge, the prompt is slightly different
+        if source == 'local':
+            summary_prompt = f"Summarize the key findings and themes from the following documents for a chemist. The user is interested in the topic: '{topic}'.\n\n{abstracts_text}"
+        else:
+            summary_prompt = f"Summarize these abstracts about '{topic}' for a chemist:\n{abstracts_text}"
+            
+        summary_response = model.generate_content(summary_prompt, safety_settings=safety_settings)
+        
+        proposal_prompt = f"Based on this summary, propose a novel research direction:\n{summary_response.text}"
+        proposal_response = model.generate_content(proposal_prompt, safety_settings=safety_settings)
+        
+        return {"topic": topic, "summary": summary_response.text, "proposal": proposal_response.text}
     except Exception as e: raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/refine_proposal")
 def refine_proposal(request: RefineRequest):
-    if not model: raise HTTPException(status_code=500, detail="Gemini API is not configured.")
-    refine_prompt = f"A user disliked a proposal for this reason: '{request.user_feedback}'. Original proposal: '{request.original_proposal}'. Generate a new proposal addressing the concern."
+    """Generates a new proposal based on user feedback."""
     try:
-        response = model.generate_content(refine_prompt)
+        genai.configure(api_key=request.api_key)
+        model = genai.GenerativeModel('gemini-1.5-pro-latest')
+        
+        refine_prompt = f"A user disliked a proposal for this reason: '{request.user_feedback}'. Original proposal: '{request.original_proposal}'. Generate a new proposal."
+        response = model.generate_content(refine_prompt, safety_settings=safety_settings)
         return {"new_proposal": response.text}
     except Exception as e: raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/generate_structure")
 def generate_structure(request: StructureRequest):
-    if not model:
-        raise HTTPException(status_code=500, detail="Gemini API is not configured.")
-
-    print("Generating molecular structure...")
-    
-    # Retry loop to handle occasional invalid SMILES from the AI
-    for attempt in range(3):
-        print(f"Attempt {attempt + 1} to generate a valid SMILES string...")
+    """Generates a chemical structure image from a text proposal."""
+    try:
+        genai.configure(api_key=request.api_key)
+        model = genai.GenerativeModel('gemini-1.5-pro-latest')
         
-        smiles_prompt = f"""
-        Based on the following research proposal, generate a single, novel chemical structure that would be a good candidate.
-        IMPORTANT: Respond with ONLY the SMILES string for the molecule and nothing else. For example: CCO
-
-        Proposal:
-        {request.proposal_text}
-        """
-        
-        try:
-            response = model.generate_content(smiles_prompt)
-            # Clean up potential markdown or other text from the AI response
+        for attempt in range(3):
+            smiles_prompt = f"Based on this proposal, generate a plausible SMILES string. Respond with ONLY the SMILES string. Proposal:\n{request.proposal_text}"
+            response = model.generate_content(smiles_prompt, safety_settings=safety_settings)
             smiles_string = response.text.strip().replace("`", "").replace("python", "")
-            print(f"Generated SMILES: {smiles_string}")
-
             mol = Chem.MolFromSmiles(smiles_string)
-            
             if mol is not None:
-                # Success! Generate the image and return the data.
                 img = Draw.MolToImage(mol, size=(300, 300))
                 buffer = io.BytesIO()
                 img.save(buffer, format='PNG')
                 img_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
                 return {"image": img_base64, "smiles": smiles_string}
-            else:
-                # If mol is None, the SMILES is invalid. The loop will try again.
-                print(f"Invalid SMILES received on attempt {attempt + 1}. Retrying...")
-
-        except Exception as e:
-            print(f"An error occurred during attempt {attempt + 1}: {e}")
-
-    # If the loop completes without a valid SMILES, raise an error.
-    raise HTTPException(status_code=500, detail="The AI failed to generate a valid chemical structure after multiple attempts.")
-
+        raise HTTPException(status_code=500, detail="AI failed to generate a valid chemical structure.")
+    except Exception as e: raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/generate_proposal")
 def generate_final_proposal(request: FinalProposalRequest):
-    if not model: raise HTTPException(status_code=500, detail="Gemini API is not configured.")
-    print("Generating final research proposal documents...")
+    """Generates the full suite of downloadable proposal documents."""
     try:
-        full_proposal_prompt = f"""
-        You are a PhD chemist writing a research proposal. Based on the following information, write a complete proposal document.
-        The document must have these H2 sections, in this order: ## Project Framework, ## Literature Review, ## Experimental Details.
-        Under ## Project Framework, create these H3 sections: ### Need, ### Solution, ### Differentiation, ### Benefits.
-        Under ## Experimental Details, create these H3 sections: ### Chemicals and Reagents, ### Synthesis Pathway.
-        Flesh out each section thoroughly.
-        CONTEXT:
-        - Initial Literature Summary: {request.summary_text}
-        - Approved Research Proposal: {request.proposal_text}
-        - Target Molecule SMILES String: {request.smiles_string}
-        """
-        full_proposal_text = model.generate_content(full_proposal_prompt).text
+        genai.configure(api_key=request.api_key)
+        model = genai.GenerativeModel('gemini-1.5-pro-latest')
         
-        recipe_prompt = f"""
-        Based on the approved research proposal and target molecule, create a synthesis recipe.
-        IMPORTANT: Respond with ONLY a comma-separated list, with each item on a new line. Do not use headers.
-        Format: Chemical Name,Molar Mass (g/mol),Amount (mg or µL),Equivalents
-        PROPOSAL: {request.proposal_text}
-        TARGET SMILES: {request.smiles_string}
-        """
-        recipe_data_str = model.generate_content(recipe_prompt).text
+        full_proposal_prompt = f"You are a PhD chemist writing a research proposal... CONTEXT: ... {request.summary_text} ... {request.proposal_text} ... {request.smiles_string}"
+        full_proposal_text = model.generate_content(full_proposal_prompt, safety_settings=safety_settings).text
         
+        recipe_prompt = f"Based on the proposal, create a synthesis recipe... PROPOSAL: {request.proposal_text} TARGET SMILES: {request.smiles_string}"
+        recipe_data_str = model.generate_content(recipe_prompt, safety_settings=safety_settings).text
+        
+        # Create Excel files
         wb_recipe = openpyxl.Workbook()
         ws_recipe = wb_recipe.active
         ws_recipe.title = "Synthesis Recipe"
         ws_recipe.append(["Chemical Name", "Molar Mass (g/mol)", "Amount (mg or µL)", "Equivalents"])
         for row in recipe_data_str.strip().split('\n'):
-            # Ensure row has the correct number of columns to avoid errors
             split_row = [item.strip() for item in row.split(',')]
-            if len(split_row) == 4:
-                ws_recipe.append(split_row)
+            if len(split_row) == 4: ws_recipe.append(split_row)
         recipe_buffer = io.BytesIO()
         wb_recipe.save(recipe_buffer)
         recipe_base64 = base64.b64encode(recipe_buffer.getvalue()).decode('utf-8')
@@ -209,15 +275,13 @@ def generate_final_proposal(request: FinalProposalRequest):
         wb_data.save(data_buffer)
         data_base64 = base64.b64encode(data_buffer.getvalue()).decode('utf-8')
 
+        # Create Word Document
         doc = Document()
         doc.add_heading('AI-Generated Research Proposal', 0)
         for line in full_proposal_text.split('\n'):
-            if line.startswith('### '):
-                doc.add_heading(line.replace('### ', ''), level=3)
-            elif line.startswith('## '):
-                doc.add_heading(line.replace('## ', ''), level=2)
-            elif line.strip():
-                doc.add_paragraph(line)
+            if line.startswith('### '): doc.add_heading(line.replace('### ', ''), level=3)
+            elif line.startswith('## '): doc.add_heading(line.replace('## ', ''), level=2)
+            elif line.strip(): doc.add_paragraph(line)
         doc_buffer = io.BytesIO()
         doc.save(doc_buffer)
         doc_base64 = base64.b64encode(doc_buffer.getvalue()).decode('utf-8')
@@ -229,5 +293,4 @@ def generate_final_proposal(request: FinalProposalRequest):
             "proposal_docx_file": doc_base64
         })
     except Exception as e:
-        print(f"An error occurred during final proposal generation: {e}")
         raise HTTPException(status_code=500, detail=str(e))

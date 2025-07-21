@@ -1,8 +1,10 @@
 fastapi
-uvicorn
+uvicorn[standard]
 requests
 python-dotenv
 google-generativeai
 rdkit
 openpyxl
 python-docx
+pypdf
+python-multipart
