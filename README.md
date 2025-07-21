@@ -118,3 +118,4 @@ You are now all set to use the AI Chemist application!
 - [ ] Add chemical name aside the image of proposed chemical structure
 - [ ] The proposal doesn't follow NSDB structure
 - [ ] try grok's api
+- [ ] prosoal.docx shoud include the name of the llm, and also user's prompt as the appedix in the end.
