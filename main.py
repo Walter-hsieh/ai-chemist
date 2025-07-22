@@ -1,9 +1,11 @@
 # main.py
-# NOTE: You will need to install the openai library: pip install openai
+# NOTE: You will need to install libraries:
+# pip install "fastapi[all]" uvicorn python-dotenv openai google-generativeai rdkit openpyxl python-docx pypdf
+
 import os
 import requests
 import google.generativeai as genai
-import openai  # <-- ADDED
+import openai
 import xml.etree.ElementTree as ET
 from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
@@ -49,7 +51,7 @@ class FinalProposalRequest(BaseRequest):
     proposal_text: str
     smiles_string: str
     structure_image_base64: str
-
+    molecule_name: str # <-- ADDED
 
 # --- FastAPI App Setup ---
 app = FastAPI()
@@ -225,7 +227,7 @@ def get_summary(topic: str, source: str, api_key: str, api_provider: str, model_
 
         elif api_provider == 'google':
             genai.configure(api_key=api_key)
-            google_model = model_name or 'gemini-1.5-flash'
+            google_model = model_name or 'gemini-2.5-flash'
             model = genai.GenerativeModel(google_model)
             
             summary_response = model.generate_content(summary_prompt, safety_settings=safety_settings)
@@ -247,7 +249,7 @@ def get_ai_response(request: BaseRequest, prompt: str) -> str:
     try:
         if request.api_provider == 'openai':
             openai.api_key = request.api_key
-            model = request.model_name or 'gpt-3.5-turbo'
+            model = request.model_name or 'o3-mini-2025-01-31'
             completion = openai.chat.completions.create(
                 model=model,
                 messages=[{"role": "user", "content": prompt}]
@@ -256,7 +258,7 @@ def get_ai_response(request: BaseRequest, prompt: str) -> str:
         
         elif request.api_provider == 'google':
             genai.configure(api_key=request.api_key)
-            model_name = request.model_name or 'gemini-1.5-flash'
+            model_name = request.model_name or 'gemini-2.5-flash'
             model = genai.GenerativeModel(model_name)
             response = model.generate_content(prompt, safety_settings=safety_settings)
             return response.text
@@ -277,24 +279,41 @@ def refine_proposal(request: RefineRequest):
 
 @app.post("/api/generate_structure")
 def generate_structure(request: StructureRequest):
-    """Generates a chemical structure image from a text proposal."""
+    """Generates a chemical structure image and name from a text proposal."""
     for _ in range(3): # Try 3 times
-        smiles_prompt = f"Based on this proposal, generate a plausible SMILES string. Respond with ONLY the SMILES string. Proposal:\n{request.proposal_text}"
-        smiles_string = get_ai_response(request, smiles_prompt).strip().replace("`", "").replace("python", "")
-        mol = Chem.MolFromSmiles(smiles_string)
-        if mol is not None:
-            img = Draw.MolToImage(mol, size=(300, 300))
-            buffer = io.BytesIO()
-            img.save(buffer, format='PNG')
-            img_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
-            return {"image": img_base64, "smiles": smiles_string}
-    raise HTTPException(status_code=500, detail="AI failed to generate a valid chemical structure after multiple attempts.")
+        # UPDATE THE PROMPT to ask for the name in a specific format
+        smiles_prompt = f"Based on this proposal, generate a plausible SMILES string and its common or IUPAC name. Respond ONLY in the format:\nSMILES: [the SMILES string]\nNAME: [the chemical name]\n\nProposal:\n{request.proposal_text}"
+        
+        response_text = get_ai_response(request, smiles_prompt).strip()
+        
+        # PARSE the response to extract SMILES and NAME
+        try:
+            lines = response_text.split('\n')
+            smiles_line = next(line for line in lines if line.startswith("SMILES:")).replace("SMILES:", "").strip()
+            name_line = next(line for line in lines if line.startswith("NAME:")).replace("NAME:", "").strip()
+            
+            smiles_string = smiles_line.replace("`", "")
+            mol = Chem.MolFromSmiles(smiles_string)
+
+            if mol is not None:
+                img = Draw.MolToImage(mol, size=(300, 300))
+                buffer = io.BytesIO()
+                img.save(buffer, format='PNG')
+                img_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
+                # RETURN the name along with the other data
+                return {"image": img_base64, "smiles": smiles_string, "name": name_line}
+        except (StopIteration, ValueError) as e:
+            # This handles cases where the AI response isn't in the expected format
+            print(f"Could not parse AI response: {response_text}. Error: {e}")
+            continue # Try again
+
+    raise HTTPException(status_code=500, detail="AI failed to generate a valid chemical structure and name after multiple attempts.")
 
 
 @app.post("/api/generate_proposal")
 def generate_final_proposal(request: FinalProposalRequest):
     """Generates the full suite of downloadable proposal documents."""
-    full_proposal_prompt = f"You are a PhD chemist writing a research proposal... CONTEXT: ... {request.summary_text} ... {request.proposal_text} ... {request.smiles_string}"
+    full_proposal_prompt = f"You are a PhD chemist writing a detailed research proposal. Use the following information to construct it. Make sure to include sections like Introduction, Background, Proposed Research, Methodology, and Expected Outcomes. Be comprehensive.\n\nCONTEXT:\n- Literature Summary: {request.summary_text}\n- Core Idea: {request.proposal_text}\n- Target Molecule SMILES: {request.smiles_string}\n- Target Molecule Name: {request.molecule_name}" # <-- UPDATED
     full_proposal_text = get_ai_response(request, full_proposal_prompt)
     
     recipe_prompt = f"Based on the proposal, create a synthesis recipe... PROPOSAL: {request.proposal_text} TARGET SMILES: {request.smiles_string}"
@@ -331,7 +350,7 @@ def generate_final_proposal(request: FinalProposalRequest):
             image_data = base64.b64decode(encoded)
             image_stream = io.BytesIO(image_data)
             doc.add_paragraph().add_run().add_picture(image_stream, width=Inches(3.0))
-            doc.add_paragraph("Figure 1: Proposed Molecular Structure.", style='Caption')
+            doc.add_paragraph(f"Figure 1: Proposed Molecular Structure - {request.molecule_name}", style='Caption') # <-- UPDATED
     except Exception as e:
         print(f"Could not add image to docx: {e}")
     

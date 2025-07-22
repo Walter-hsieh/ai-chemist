@@ -69,9 +69,10 @@
             <button id="disapprove-btn" class="disapprove-btn">👎 Disapprove Proposal</button>
         </div>
     </div>
+
     <div id="structure-section" class="results-section hidden">
         <h2>Proposed Molecular Structure</h2>
-        <div id="structure-image-container"></div>
+        <h3 id="molecule-name-display" style="color: #333; font-weight: 500;"></h3> <div id="structure-image-container"></div>
         <div id="structure-feedback-buttons">
             <button id="final-approve-btn" class="approve-btn">✅ Final Approve & Generate Docs</button>
             <button id="redesign-btn" class="disapprove-btn">🔄 Redesign Molecule</button>
@@ -92,6 +93,7 @@
         let currentProposal = "";
         let currentSmiles = "";
         let currentStructureImage = "";
+        let currentMoleculeName = ""; // <-- ADDED
 
         // --- Getting all element references ---
         const allElements = {
@@ -105,6 +107,7 @@
             sourceSelect: document.getElementById('source-select'),
             structureSection: document.getElementById('structure-section'),
             structureImageContainer: document.getElementById('structure-image-container'),
+            moleculeNameDisplay: document.getElementById('molecule-name-display'), // <-- ADDED
             finalApproveBtn: document.getElementById('final-approve-btn'),
             redesignBtn: document.getElementById('redesign-btn'),
             finalProposalSection: document.getElementById('final-proposal-section'),
@@ -193,6 +196,7 @@
             allElements.searchButton.disabled = true;
             allElements.searchButton.innerText = 'Searching...';
             [allElements.summaryDiv, allElements.proposalSection, allElements.structureSection, allElements.finalProposalSection].forEach(el => el.classList.add('hidden'));
+            allElements.moleculeNameDisplay.innerText = ''; // <-- ADDED
             document.getElementById('feedback-buttons').classList.remove('hidden');
             document.getElementById('structure-feedback-buttons').classList.remove('hidden');
             allElements.summaryDiv.classList.remove('hidden');
@@ -256,9 +260,11 @@
                 
                 const data = await response.json();
                 currentSmiles = data.smiles;
+                currentMoleculeName = data.name; // <-- ADDED
                 const imageUrl = `data:image/png;base64,${data.image}`;
                 currentStructureImage = imageUrl;
                 
+                allElements.moleculeNameDisplay.innerText = currentMoleculeName; // <-- ADDED
                 allElements.structureImageContainer.innerHTML = `<img id="molecule-img" src="${imageUrl}" alt="Generated Molecule" />`;
             } catch (error) {
                 allElements.structureImageContainer.innerText = `An error occurred: ${error.message}`;
@@ -272,6 +278,7 @@
                 proposal_text: currentProposal,
                 smiles_string: currentSmiles,
                 structure_image_base64: currentStructureImage,
+                molecule_name: currentMoleculeName // <-- ADDED
             });
             if (!body) return;
 
