@@ -122,3 +122,4 @@ You are now all set to use the AI Chemist application!
 - [ ] add perplexity as one of choice.
 - [ ] provide the reasonal reseason why using the ligand and research direction
 - [ ] The synthesis details shoulde tailored with user's current equipment
+- [ ] rename the papers uploaded before saving them in the database
