@@ -115,7 +115,7 @@ You are now all set to use the AI Chemist application!
 
 ### Issues
 - [ ] The recipe and data recording format is not good (provide examples for ai to learn)
-- [ ] Add chemical name aside the image of proposed chemical structure
+- [x] Add chemical name aside the image of proposed chemical structure
 - [ ] The proposal doesn't follow NSDB structure
 - [ ] try grok's api
 - [ ] prosoal.docx shoud include the name of the llm, and also user's prompt as the appedix in the end.
