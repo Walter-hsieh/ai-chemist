@@ -119,3 +119,4 @@ You are now all set to use the AI Chemist application!
 - [ ] The proposal doesn't follow NSDB structure
 - [ ] try grok's api
 - [ ] prosoal.docx shoud include the name of the llm, and also user's prompt as the appedix in the end.
+- [ ] add perplexity as one of choice.
